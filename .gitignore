@@ -1,3 +1,7 @@
+# Project specific data files
+/00_raw_data
+/01_processed_data
+
 # History files
 .Rhistory
 .Rapp.history
