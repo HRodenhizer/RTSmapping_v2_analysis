@@ -1,0 +1,54 @@
+---
+title: "2025 RTS Analysis Data Prep"
+format: html
+---
+
+# Set-Up
+
+## Libraries
+
+```{r}
+library(sf)
+library(tidyverse)
+```
+
+## Project Specific Functions
+
+```{r}
+source("03_scripts/01_functions.R")
+```
+
+
+# Import Data
+
+```{r}
+rts <- read_sf("../RTSMapping_v2_products/2025q3/south_rts_candidates.gpkg")
+```
+
+# Prep Data
+
+## Filter High Probability RTS
+
+```{r}
+rts_high <- rts |>
+  filter(conf_class == "high") |>
+  mutate(rts_id = as.integer(rts_id)) |> 
+  st_transform(6931) # NSIDC EASE-Grid 2.0 North
+
+rts_high_pt = rts_high |> 
+  st_centroid()
+```
+
+# Save Output
+
+```{r}
+st_write(
+  rts_high,
+  "01_processed_data/high_prob_rts_poly.geojson"
+)
+
+st_write(
+  rts_high_pt,
+  "01_processed_data/high_prob_rts_pt.geojson"
+)
+```
