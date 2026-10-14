@@ -1,0 +1,170 @@
+---
+title: "rts_pt Geospatial Analysis"
+format: html
+---
+
+# Set-Up
+
+## Libraries
+
+```{r}
+library(sf)
+library(tidyverse)
+# library(terra)
+# library(tidyterra)
+# library(ggnewscale)
+library(viridis)
+```
+
+## Project Specific Functions
+
+```{r}
+source("03_scripts/01_functions.R")
+```
+
+## Plotting Defaults
+
+```{r}
+theme_set(theme_bw())
+```
+
+
+# Import Data
+
+## RTS
+
+```{r}
+rts_pt <- read_sf("01_processed_data/high_prob_rts_pt.geojson")
+```
+
+## Domain
+
+```{r}
+domain <- read_sf("../RTSmapping_v2/domain/circumpolar_south_domain.geojson")
+
+domain <- domain |>
+  st_transform(4326) |>
+  st_cast("POLYGON") |>
+  mutate(id = 1:n())
+
+# 330 is kamchatka, 443 is Wrangell East, 444 is Wrangell West, 445 is mainland Russia
+domain$geometry[330] <- fix_geometry_at_origin(
+  domain$geometry[330],
+  dist = 0.000014
+)
+domain$geometry[443] <- fix_geometry_at_origin(
+  domain$geometry[443],
+  dist = 0.000014
+)
+domain$geometry[444] <- fix_geometry_at_origin(
+  domain$geometry[444],
+  dist = 0.000014
+)
+domain$geometry[445] <- fix_geometry_at_origin(
+  domain$geometry[445],
+  dist = 0.000014
+)
+
+domain <- domain |>
+  select(-id) |>
+  summarise(
+    geometry = st_union(domain)
+  ) |>
+  st_transform(st_crs(rts_pt))
+
+ggplot() + geom_sf(data = domain)
+```
+
+## NaturalEarth
+
+```{r}
+world <- rnaturalearth::ne_countries(scale = "medium", returnclass = "sf") |>
+  select(name, continent, region_un, subregion)
+```
+
+```{r}
+crop_poly <- tibble(
+  geometry = st_sfc(st_point(c(0, 90)), crs = 'EPSG:4326')
+) %>%
+  st_sf() %>%
+  st_transform(crs = st_crs(rts_pt)) %>%
+  st_buffer(dist = 5250000) %>%
+  smoothr::densify(n = 3) %>%
+  st_transform(crs = 'EPSG:4326')
+
+crop_bbox <- crop_poly |>
+  st_transform(6931) |>
+  st_bbox()
+
+long_lines <- seq(-180, 180, by = 60) %>%
+  map(
+    ~ long_lines_from_coords(.x, lat_min = st_bbox(crop_poly)[2], lat_max = 90)
+  ) %>%
+  bind_rows()
+
+lat_lines <- seq(50, 90, by = 10) %>%
+  map(~ lat_lines_from_coords(.x, lon_min = -180, lon_max = 180)) %>%
+  bind_rows()
+```
+
+```{r}
+russia <- world |>
+  filter(name == "Russia") |>
+  st_cast("POLYGON") |>
+  mutate(id = 1:n())
+
+# West Wrangell Island is 29, East Wrangell Island is 31
+russia$geometry[29] <- fix_geometry_at_origin(russia$geometry[29], dist = 0.11)
+russia$geometry[31] <- fix_geometry_at_origin(russia$geometry[31], dist = 0.11)
+
+russia <- russia |>
+  select(-id)
+
+russia <- russia |>
+  summarise(
+    geometry = st_union(russia),
+    .by = c(name, continent, region_un, subregion)
+  )
+
+world <- world |>
+  filter(name != "Russia") |>
+  rbind(russia)
+
+
+world_north <- world %>%
+  st_make_valid() |>
+  st_intersection(crop_poly) %>%
+  st_transform(crs = st_crs(rts_pt))
+```
+
+# Map RTS (First Look)
+
+```{r}
+ggplot() +
+  geom_sf(data = world_north) +
+  geom_sf(
+    data = rts_pt,
+    color = "darkred",
+    size = 0.5
+  ) +
+  geom_sf(
+    data = crop_poly,
+    color = "black",
+    fill = "transparent"
+  ) +
+  # coord_sf(expand = FALSE) +
+  theme_void()
+```
+
+# RTS Clustering
+
+```{r}
+
+```
+
+
+# RTS Regions
+
+```{r}
+
+```
