@@ -25,18 +25,66 @@ source("03_scripts/01_functions.R")
 rts <- read_sf("../RTSMapping_v2_products/2025q3/south_rts_candidates.gpkg")
 ```
 
+```{r}
+domain <- read_sf("../RTSmapping_v2/domain/circumpolar_south_domain.geojson")
+```
+
+
 # Prep Data
+
+## Remove 180th Meridian Polygon Break in Domain
+
+```{r}
+domain <- domain |>
+  st_transform(4326) |>
+  st_cast("POLYGON") |>
+  mutate(id = 1:n())
+
+# 330 is kamchatka, 443 is Wrangell East, 444 is Wrangell West, 445 is mainland Russia
+domain$geometry[330] <- fix_geometry_at_origin(
+  domain$geometry[330],
+  dist = 0.000014
+)
+domain$geometry[443] <- fix_geometry_at_origin(
+  domain$geometry[443],
+  dist = 0.000014
+)
+domain$geometry[444] <- fix_geometry_at_origin(
+  domain$geometry[444],
+  dist = 0.000014
+)
+domain$geometry[445] <- fix_geometry_at_origin(
+  domain$geometry[445],
+  dist = 0.000014
+)
+
+domain <- domain |>
+  select(-id) |>
+  summarise(
+    geometry = st_union(domain)
+  ) |>
+  st_transform(st_crs(rts_pt))
+
+st_write(
+  domain,
+  "./01_processed_data/domain_clean.geojson"
+)
+```
 
 ## Filter High Probability RTS
 
 ```{r}
 rts_high <- rts |>
   filter(conf_class == "high") |>
-  mutate(rts_id = as.integer(rts_id)) |> 
+  mutate(rts_id = as.integer(rts_id)) |>
   st_transform(6931) # NSIDC EASE-Grid 2.0 North
 
-rts_high_pt = rts_high |> 
-  st_centroid()
+rts_high_pt <- rts_high |>
+  st_centroid() |>
+  # assume any RTS that fall outside the domain are false positives and remove
+  # (they are there because we didn't clip basemap grids to the domain)
+  # this is slow so only doing for pts for now (manual review will most likely fix this problem)
+  st_intersection(domain)
 ```
 
 # Save Output
