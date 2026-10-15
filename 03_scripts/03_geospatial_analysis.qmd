@@ -9,6 +9,7 @@ format: html
 
 ```{r}
 library(sf)
+library(spatstat)
 library(tidyverse)
 # library(terra)
 # library(tidyterra)
@@ -109,7 +110,21 @@ world_north <- world %>%
 
 ```{r}
 ggplot() +
-  geom_sf(data = world_north) +
+  geom_sf(
+    data = world_north,
+    color = "transparent",
+    fill = "gray70"
+  ) +
+  geom_sf(
+    data = domain,
+    color = "black",
+    fill = "gray95",
+    linewidth = 0.4
+  ) +
+  geom_sf(
+    data = world_north,
+    fill = "transparent"
+  ) +
   geom_sf(
     data = rts_pt,
     color = "darkred",
@@ -125,6 +140,39 @@ ggplot() +
 ```
 
 # RTS Clustering
+
+## Chi-squared Test
+```{r}
+# set up a point pattern (spatstat) dataset with the domain as the window
+(rts_pt_pattern <- c(
+  domain |>
+    st_as_sfc(),
+  rts_pt |>
+    st_geometry()
+) |>
+  as.ppp())
+
+### This test is a bit slow (a few minutes), so only re-run as necessary
+# # create a grid across the window
+# rts_domain_grid <- quadratcount(rts_pt_pattern, nx = 20, ny = 20)
+# plot(rts_domain_grid)
+
+# # test with Chi-squared test
+# quadrat.test(rts_pt_pattern, nx = 20, ny = 20)
+```
+
+Warning message:
+Some expected counts are small; chi^2 approximation may be inaccurate 
+
+	Chi-squared test of CSR using quadrat counts
+
+data:  rts_pt_pattern
+X2 = 442331, df = 236, p-value < 2.2e-16
+alternative hypothesis: two.sided
+
+Quadrats: 237 tiles (irregular windows)
+
+## Nearest Neighbor Distances
 
 ```{r}
 
