@@ -10,6 +10,7 @@ format: html
 ```{r}
 library(sf)
 library(spatstat)
+library(spopt)
 library(tidyverse)
 # library(terra)
 # library(tidyterra)
@@ -215,7 +216,161 @@ ggplot(
 
 
 # RTS Regions
+This section creates RTS regions (spatially contiguous hotspot and coldspot regions) using the SKATER (Spatial 'K'luster Analysis by Tree Edge Removal) algorithm. Since RTS count is the attribute of interest for this clustering, I have first gridded the entire region and extracted RTS counts. 
+
+## Create Grid
+Try 10 km x 10 km grids to start.
 
 ```{r}
+# rts_grid <- domain |>
+#   st_make_grid(
+#     cellsize = c(100000, 100000),
+#     square = TRUE
+#   ) |>
+#   st_as_sf() |>
+#   rename(geometry = x)
 
+# rts_grid <- rts_grid |>
+#   st_filter(domain)
+```
+
+```{r}
+# ggplot() +
+#   geom_sf(
+#     data = world_north,
+#     color = "transparent",
+#     fill = "gray70"
+#   ) +
+#   geom_sf(
+#     data = domain,
+#     color = "black",
+#     fill = "gray95",
+#     linewidth = 0.4
+#   ) +
+#   geom_sf(
+#     data = world_north,
+#     fill = "transparent"
+#   ) +
+#   geom_sf(
+#     data = rts_pt,
+#     color = "darkred",
+#     size = 0.5
+#   ) +
+#   geom_sf(
+#     data = rts_grid,
+#     color = "black",
+#     fill = "transparent"
+#   ) +
+#   geom_sf(
+#     data = crop_poly,
+#     color = "black",
+#     fill = "transparent"
+#   ) +
+#   # coord_sf(expand = FALSE) +
+#   theme_void()
+```
+
+```{r}
+# st_write(
+#   rts_grid,
+#   "./01_processed_data/rts_grid.geojson"
+# )
+rts_grid <- st_read("./01_processed_data/rts_grid.geojson")
+```
+
+## Gridded RTS Counts
+
+```{r}
+rts_grid <- rts_grid |>
+  st_join(rts_pt) |>
+  summarise(
+    rts_count = n(),
+    .by = geometry
+  ) |>
+  mutate(
+    rts_count_log10 = log10(rts_count),
+    .after = rts_count
+  )
+```
+
+```{r}
+ggplot(
+  rts_grid |>
+    filter(RTSCount > 1),
+  aes(x = RTSCount)
+) +
+  geom_histogram()
+
+ggplot() +
+  geom_sf(data = world_north) +
+  geom_sf(
+    data = rts_grid,
+    aes(color = RTSCount, fill = RTSCount)
+  ) +
+  scale_color_viridis(
+    name = "RTS Count",
+    trans = "log10"
+  ) +
+  scale_fill_viridis(
+    name = "RTS Count",
+    trans = "log10"
+  ) +
+  geom_sf(
+    data = world_north,
+    fill = "transparent"
+  ) +
+  geom_sf(
+    data = crop_poly,
+    color = "black",
+    fill = "transparent"
+  ) +
+  # coord_sf(expand = FALSE) +
+  theme_void()
+```
+
+## SKATER
+
+```{r}
+rts_regions <- skater(
+  rts_grid,
+  attrs = c("rts_count_log10"),
+  weights = "rook",
+  n_regions = 1,
+  bridge_islands = TRUE,
+  seed = 42
+)
+```
+
+```{r}
+ggplot() +
+  geom_sf(data = world_north) +
+  # geom_sf(
+  #   data = rts_grid,
+  #   aes(color = RTSCount, fill = RTSCount)
+  # ) +
+  # scale_color_viridis(
+  #   name = "RTS Count",
+  #   trans = "log10"
+  # ) +
+  # scale_fill_viridis(
+  #   name = "RTS Count",
+  #   trans = "log10"
+  # ) +
+  geom_sf(
+    data = rts_regions,
+    aes(color = .region, fill = .region)
+  ) +
+  scale_color_viridis(discrete = TRUE) +
+  scale_fill_viridis(discrete = TRUE) +
+  geom_sf(
+    data = world_north,
+    fill = "transparent"
+  ) +
+  geom_sf(
+    data = crop_poly,
+    color = "black",
+    fill = "transparent"
+  ) +
+  # coord_sf(expand = FALSE) +
+  theme_void()
 ```
