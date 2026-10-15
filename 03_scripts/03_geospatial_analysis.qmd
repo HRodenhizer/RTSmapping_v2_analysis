@@ -40,39 +40,7 @@ rts_pt <- read_sf("01_processed_data/high_prob_rts_pt.geojson")
 ## Domain
 
 ```{r}
-domain <- read_sf("../RTSmapping_v2/domain/circumpolar_south_domain.geojson")
-
-domain <- domain |>
-  st_transform(4326) |>
-  st_cast("POLYGON") |>
-  mutate(id = 1:n())
-
-# 330 is kamchatka, 443 is Wrangell East, 444 is Wrangell West, 445 is mainland Russia
-domain$geometry[330] <- fix_geometry_at_origin(
-  domain$geometry[330],
-  dist = 0.000014
-)
-domain$geometry[443] <- fix_geometry_at_origin(
-  domain$geometry[443],
-  dist = 0.000014
-)
-domain$geometry[444] <- fix_geometry_at_origin(
-  domain$geometry[444],
-  dist = 0.000014
-)
-domain$geometry[445] <- fix_geometry_at_origin(
-  domain$geometry[445],
-  dist = 0.000014
-)
-
-domain <- domain |>
-  select(-id) |>
-  summarise(
-    geometry = st_union(domain)
-  ) |>
-  st_transform(st_crs(rts_pt))
-
-ggplot() + geom_sf(data = domain)
+domain <- st_read("./01_processed_data/domain_clean.geojson")
 ```
 
 ## NaturalEarth
