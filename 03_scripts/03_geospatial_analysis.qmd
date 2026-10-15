@@ -175,7 +175,42 @@ Quadrats: 237 tiles (irregular windows)
 ## Nearest Neighbor Distances
 
 ```{r}
+nearest_features_idx <- st_nearest_feature(rts_pt)
 
+nearest_features <-
+  rts_pt$geometry[nearest_features_idx] |>
+  st_as_sf() |>
+  rename(geometry = x)
+
+rts_pt <- rts_pt |>
+  mutate(
+    nn_dist_km = as.numeric(
+      st_distance(
+        st_transform(rts_pt, 4326),
+        st_transform(nearest_features, 4326),
+        by_element = TRUE
+      )
+    ) /
+      1000,
+    .after = max_prob
+  )
+```
+
+```{r}
+ggplot(
+  data = rts_pt,
+  aes(x = nn_dist_km)
+) +
+  geom_histogram(aes(y = after_stat(count) / sum(after_stat(count)))) +
+  scale_x_continuous(
+    name = "Nearest Neighbor Distance (km)",
+    transform = "log10"
+  ) +
+  scale_y_continuous(
+    name = "Count",
+    expand = expansion(mult = c(0, 0.05)),
+    labels = scales::percent
+  )
 ```
 
 
