@@ -87,6 +87,30 @@ rts_high_pt <- rts_high |>
   st_intersection(domain)
 ```
 
+## Nearest Neighbor Distances
+
+```{r}
+nearest_features_idx <- st_nearest_feature(rts_high_pt)
+
+nearest_features <-
+  rts_pt$geometry[nearest_features_idx] |>
+  st_as_sf() |>
+  rename(geometry = x)
+
+rts_high_pt <- rts_high_pt |>
+  mutate(
+    nn_dist_km = as.numeric(
+      st_distance(
+        st_transform(rts_pt, 4326),
+        st_transform(nearest_features, 4326),
+        by_element = TRUE
+      )
+    ) /
+      1000,
+    .after = max_prob
+  )
+```
+
 # Save Output
 
 ```{r}

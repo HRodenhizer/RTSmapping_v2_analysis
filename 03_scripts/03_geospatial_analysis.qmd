@@ -36,7 +36,7 @@ theme_set(theme_bw())
 ## RTS
 
 ```{r}
-rts_pt <- read_sf("01_processed_data/high_prob_rts_pt.geojson")
+rts_pt <- read_sf("./01_processed_data/high_prob_rts_pt.geojson")
 ```
 
 ## Domain
@@ -174,28 +174,6 @@ alternative hypothesis: two.sided
 Quadrats: 237 tiles (irregular windows)
 
 ## Nearest Neighbor Distances
-
-```{r}
-nearest_features_idx <- st_nearest_feature(rts_pt)
-
-nearest_features <-
-  rts_pt$geometry[nearest_features_idx] |>
-  st_as_sf() |>
-  rename(geometry = x)
-
-rts_pt <- rts_pt |>
-  mutate(
-    nn_dist_km = as.numeric(
-      st_distance(
-        st_transform(rts_pt, 4326),
-        st_transform(nearest_features, 4326),
-        by_element = TRUE
-      )
-    ) /
-      1000,
-    .after = max_prob
-  )
-```
 
 ```{r}
 ggplot(
