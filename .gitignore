@@ -2,6 +2,9 @@
 /00_raw_data
 /01_processed_data
 
+# QGIS files
+*.qgz
+
 # History files
 .Rhistory
 .Rapp.history
