@@ -264,26 +264,12 @@ ring_counts <- lapply(seq_along(lin), function(i) {
 }) |>
   bind_rows()
 
-bad_rings <- filter(ring_counts, n_pts < 4) # a closed ring needs >= 4 coordinates
+bad_rings <- filter(ring_counts, n_pts < 3 # a closed ring needs at least 3 coordinates
 bad_rings
 
 mountain_glaciers$Shape[[bad_rings$feature]][[bad_rings$part]]
 
-# This cleans up the problematic part
-clean_mp <- function(geom) {
-  parts <- lapply(unclass(geom), function(poly) {
-    if (nrow(poly[[1]]) < 4) {
-      return(NULL)
-    } # collapsed exterior: drop the whole part
-    Filter(function(ring) nrow(ring) >= 4, poly) # collapsed holes: drop just the ring
-  })
-  parts <- Filter(Negate(is.null), parts)
-  if (length(parts) == 0) {
-    return(st_multipolygon())
-  }
-  st_multipolygon(parts)
-}
-
+# This removes the problematic part that only has 2 points
 clean <- st_sfc(lapply(lin, clean_mp), crs = st_crs(mountain_glaciers))
 ```
 
@@ -314,16 +300,6 @@ holes_outside_shell_idx <- which(str_detect(
 These require a manual `st_sym_difference()` to fix.
 
 ```{r}
-fix_nested_shell <- function(g, crs) {
-  p <- st_cast(st_sfc(g, crs = crs), "POLYGON") |> as.list()
-  Reduce(
-    function(a, b) {
-      st_sym_difference(st_sfc(a, crs = crs), st_sfc(b, crs = crs))[[1]]
-    },
-    p
-  )
-}
-
 # ggplot() +
 #   geom_sf(
 #     data = clean[nested_shells_idx][[1]],
@@ -365,24 +341,6 @@ For these issues, holes were defined within the incorrect multipolygon part (not
 
 # Check that the visible overlapping polygons (meant to be holes) are assigned to the wrong polygon part
 # Any count greater than zero indicates a hole that is defined in a ring that it isn't `st_within()`
-holes_outside <- function(g) {
-  sapply(unclass(g), function(poly) {
-    if (length(poly) < 2) {
-      return(0L)
-    }
-    shell <- st_polygon(poly[1])
-    sum(
-      !vapply(
-        poly[-1],
-        function(h) {
-          st_within(st_polygon(list(h)), shell, sparse = FALSE)[1, 1]
-        },
-        logical(1)
-      )
-    )
-  })
-}
-
 holes_assigned_to_wrong_part <- lapply(
   st_geometry(clean)[holes_outside_shell_idx],
   holes_outside
@@ -390,28 +348,6 @@ holes_assigned_to_wrong_part <- lapply(
 # Yes, there are several geometries with holes that were assigned to the incorrect polygon
 
 # rebuild geometries with holes assigned to correct multipolygon parts
-rebuild_mp <- function(g) {
-  rings <- unlist(unclass(g), recursive = FALSE) # flat list of ring matrices
-  polys <- st_sfc(lapply(rings, \(r) st_polygon(list(r)))) # no CRS: planar tests
-  cont <- st_contains_properly(polys, polys, sparse = FALSE) # cont[i, j]: i contains j
-  depth <- colSums(cont)
-  area <- as.numeric(st_area(polys))
-
-  ext <- which(depth %% 2 == 0)
-  hol <- which(depth %% 2 == 1)
-
-  parent <- vapply(
-    hol,
-    function(h) {
-      cand <- ext[cont[ext, h]]
-      cand[which.min(area[cand])]
-    },
-    integer(1)
-  )
-
-  st_multipolygon(lapply(ext, \(e) c(rings[e], rings[hol[parent == e]])))
-}
-
 clean[holes_outside_shell_idx] <- map(
   clean[holes_outside_shell_idx],
   rebuild_mp

@@ -48,3 +48,76 @@ lat_lines_from_coords <- function(lat, lon_min, lon_max) {
 
   return(line)
 }
+
+##### Fix invalid geometries in mountain glaciers dataset
+# clean_mp
+# this function removes multipolygon parts with 2 points or less
+clean_mp <- function(geom) {
+  parts <- lapply(unclass(geom), function(poly) {
+    if (nrow(poly[[1]]) < 3) {
+      return(NULL)
+    } # collapsed exterior: drop the whole part
+    Filter(function(ring) nrow(ring) >= 3, poly) # collapsed holes: drop just the ring
+  })
+  parts <- Filter(Negate(is.null), parts)
+  if (length(parts) == 0) {
+    return(st_multipolygon())
+  }
+  st_multipolygon(parts)
+}
+
+# fix_nested_shell
+# this function takes the symmetric difference of multipolygon parts that fall within the shell to turn them into holes
+fix_nested_shell <- function(g, crs) {
+  p <- st_cast(st_sfc(g, crs = crs), "POLYGON") |> as.list()
+  Reduce(
+    function(a, b) {
+      st_sym_difference(st_sfc(a, crs = crs), st_sfc(b, crs = crs))[[1]]
+    },
+    p
+  )
+}
+
+# holes_outside
+# this function determines if there are multipolygon parts that are defined in the wrong shell
+holes_outside <- function(g) {
+  sapply(unclass(g), function(poly) {
+    if (length(poly) < 2) {
+      return(0L)
+    }
+    shell <- st_polygon(poly[1])
+    sum(
+      !vapply(
+        poly[-1],
+        function(h) {
+          st_within(st_polygon(list(h)), shell, sparse = FALSE)[1, 1]
+        },
+        logical(1)
+      )
+    )
+  })
+}
+
+# rebuild_mp
+# this function reassigns holes in multipolygons to the correct shell
+rebuild_mp <- function(g) {
+  rings <- unlist(unclass(g), recursive = FALSE) # flat list of ring matrices
+  polys <- st_sfc(lapply(rings, \(r) st_polygon(list(r)))) # no CRS: planar tests
+  cont <- st_contains_properly(polys, polys, sparse = FALSE) # cont[i, j]: i contains j
+  depth <- colSums(cont)
+  area <- as.numeric(st_area(polys))
+
+  ext <- which(depth %% 2 == 0)
+  hol <- which(depth %% 2 == 1)
+
+  parent <- vapply(
+    hol,
+    function(h) {
+      cand <- ext[cont[ext, h]]
+      cand[which.min(area[cand])]
+    },
+    integer(1)
+  )
+
+  st_multipolygon(lapply(ext, \(e) c(rings[e], rings[hol[parent == e]])))
+}
