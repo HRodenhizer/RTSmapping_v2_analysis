@@ -8,8 +8,16 @@ format: html
 ## Libraries
 
 ```{r}
+library(terra)
+library(tidyterra)
 library(sf)
+library(smoothr)
 library(tidyverse)
+library(viridis)
+```
+
+```{r}
+Sys.setenv(OGR_ARC_STEPSIZE = "0.001")
 ```
 
 ## Project Specific Functions
@@ -21,73 +29,138 @@ source("03_scripts/01_functions.R")
 
 # Import Data
 
+## Domain
+
 ```{r}
-rts <- read_sf("../RTSMapping_v2_products/2025q3/south_rts_candidates.gpkg")
+domain_south <- st_read(
+  "../RTSmapping_v2/domain/circumpolar_south_domain.geojson"
+)
+domain <- st_read("../RTSmapping_v2/domain/circumpolar_domain.geojson")
+```
+
+## RTS
+
+```{r}
+rts <- st_read("../RTSMapping_v2_products/2025q3/south_rts_candidates.gpkg") |>
+  st_transform(6931) # NSIDC EASE-Grid 2.0 North
+```
+
+## Environmental Predictors
+Most environmental predictors have already been downloaded between 43 deg N and 85 deg N, and just need to be recompiled into a single dataset within the domain (rts_rep_analysis/code/ steps 2 and 3). The exception is glacier data which was not previously prepared.
+
+### LGM Glacier Extents
+
+```{r}
+na_files <- list.files(
+  "../../../external_datasets/last_glacial_maximum/gowan_ice_reconstruction/margins/North_America",
+  full.names = TRUE,
+  pattern = "\\.gmt"
+)
+eu_files <- list.files(
+  "../../../external_datasets/last_glacial_maximum/gowan_ice_reconstruction/margins/Eurasia",
+  full.names = TRUE,
+  pattern = "\\.gmt"
+)
+
+ice_sheets <- map2_dfr(
+  na_files,
+  eu_files,
+  ~ st_read(.x) |>
+    st_union() |>
+    st_union(
+      st_read(.y) |>
+        st_union()
+    ) |>
+    st_as_sf() |>
+    mutate(
+      date = as.integer(
+        str_extract(.x, "(?<=/)[:digit:]{1,5}(?=\\.gmt)")
+      )
+    )
+) |>
+  st_as_sf() |>
+  rename(geometry = x) |>
+  arrange(date) |>
+  st_transform(crs = 6931)
+
+ggplot() +
+  geom_sf(
+    data = ice_sheets,
+    aes(fill = date)
+  ) +
+  scale_fill_viridis() +
+  coord_sf(expand = FALSE)
 ```
 
 ```{r}
-domain <- read_sf("../RTSmapping_v2/domain/circumpolar_south_domain.geojson")
+mountain_glaciers <- st_read(
+  dsn = "../../../external_datasets/last_glacial_maximum/lima_GLACIMONTIS.gdb",
+  layer = "EmpiricallyReconstructedPaleoglaciers"
+)
 ```
 
 
 # Prep Data
 
-## Remove 180th Meridian Polygon Break in Domain
+## Prep Domain Data
+
+### Remove 180th Meridian Polygon Break
 
 ```{r}
-domain <- domain |>
+domain_south <- domain_south |>
   st_transform(4326) |>
   st_cast("POLYGON") |>
   mutate(id = 1:n())
 
 # 330 is kamchatka, 443 is Wrangell East, 444 is Wrangell West, 445 is mainland Russia
-domain$geometry[330] <- fix_geometry_at_origin(
-  domain$geometry[330],
+domain_south$geometry[330] <- fix_geometry_at_origin(
+  domain_south$geometry[330],
   dist = 0.000014
 )
-domain$geometry[443] <- fix_geometry_at_origin(
-  domain$geometry[443],
+domain_south$geometry[443] <- fix_geometry_at_origin(
+  domain_south$geometry[443],
   dist = 0.000014
 )
-domain$geometry[444] <- fix_geometry_at_origin(
-  domain$geometry[444],
+domain_south$geometry[444] <- fix_geometry_at_origin(
+  domain_south$geometry[444],
   dist = 0.000014
 )
-domain$geometry[445] <- fix_geometry_at_origin(
-  domain$geometry[445],
+domain_south$geometry[445] <- fix_geometry_at_origin(
+  domain_south$geometry[445],
   dist = 0.000014
 )
 
-domain <- domain |>
+domain_south <- domain_south |>
   select(-id) |>
   summarise(
-    geometry = st_union(domain)
+    geometry = st_union(domain_south)
   ) |>
-  st_transform(st_crs(rts_pt))
+  st_transform(st_crs(rts))
 
-st_write(
-  domain,
-  "./01_processed_data/domain_clean.geojson"
-)
+# st_write(
+#   domain_south,
+#   "./01_processed_data/domain_clean.geojson"
+# )
 ```
 
-## Filter High Probability RTS
+## Prep RTS Dataset
+
+### Filter High Probability RTS
 
 ```{r}
 rts_high <- rts |>
   filter(conf_class == "high") |>
-  mutate(rts_id = as.integer(rts_id)) |>
-  st_transform(6931) # NSIDC EASE-Grid 2.0 North
+  mutate(rts_id = as.integer(rts_id))
 
 rts_high_pt <- rts_high |>
   st_centroid() |>
   # assume any RTS that fall outside the domain are false positives and remove
   # (they are there because we didn't clip basemap grids to the domain)
   # this is slow so only doing for pts for now (manual review will most likely fix this problem)
-  st_intersection(domain)
+  st_intersection(domain_south)
 ```
 
-## Nearest Neighbor Distances
+### Nearest Neighbor Distances
 
 ```{r}
 nearest_features_idx <- st_nearest_feature(rts_high_pt)
@@ -111,16 +184,275 @@ rts_high_pt <- rts_high_pt |>
   )
 ```
 
-# Save Output
+### Write RTS Datasets
 
 ```{r}
 st_write(
   rts_high,
-  "01_processed_data/high_prob_rts_poly.geojson"
+  "./01_processed_data/high_prob_rts_poly.geojson"
 )
 
 st_write(
   rts_high_pt,
-  "01_processed_data/high_prob_rts_pt.geojson"
+  "./01_processed_data/high_prob_rts_pt.geojson"
 )
 ```
+
+## Prep Glacier Data
+
+### Remove Multipolygon part that has only 2 points
+```{r}
+# Many functions were not working, with an error about a polygon part that only had 2 points
+# This finds the problematic part
+lin <- st_cast(st_geometry(mountain_glaciers), "MULTIPOLYGON")
+
+ring_counts <- lapply(seq_along(lin), function(i) {
+  st_coordinates(lin[[i]]) |>
+    as.data.frame() |>
+    count(ring = L1, part = L2, name = "n_pts") |>
+    mutate(feature = i)
+}) |>
+  bind_rows()
+
+bad_rings <- filter(ring_counts, n_pts < 4) # a closed ring needs >= 4 coordinates
+bad_rings
+
+mountain_glaciers$Shape[[bad_rings$feature]][[bad_rings$part]]
+
+# This cleans up the problematic part
+clean_mp <- function(geom) {
+  parts <- lapply(unclass(geom), function(poly) {
+    if (nrow(poly[[1]]) < 4) {
+      return(NULL)
+    } # collapsed exterior: drop the whole part
+    Filter(function(ring) nrow(ring) >= 4, poly) # collapsed holes: drop just the ring
+  })
+  parts <- Filter(Negate(is.null), parts)
+  if (length(parts) == 0) {
+    return(st_multipolygon())
+  }
+  st_multipolygon(parts)
+}
+
+clean <- st_sfc(lapply(lin, clean_mp), crs = st_crs(mountain_glaciers))
+```
+
+### Find Other Invalid Geometries
+
+```{r}
+# There are a lot of internal polygons that should be holes and a few other issues
+table(st_is_valid(clean))
+bad_geometries <- st_is_valid(clean, reason = TRUE) # look for "Self-intersection" or similar
+possible_reasons <- unique(str_replace(bad_geometries, "\\[.+\\]", ""))
+possible_reasons <- possible_reasons[possible_reasons != "Valid Geometry"]
+
+# All remaining geometry problems to fix
+# Ring Self-intersection
+self_intersections_idx <- which(str_detect(bad_geometries, possible_reasons[1]))
+# Nested shells
+nested_shells_idx <- which(str_detect(bad_geometries, possible_reasons[2]))
+# Hole lies outside shell
+holes_outside_shell_idx <- which(str_detect(
+  bad_geometries,
+  possible_reasons[3]
+))
+```
+
+### Fix Invalid Geometries by Type
+
+#### Nested Shells
+These require a manual `st_sym_difference()` to fix.
+
+```{r}
+fix_nested_shell <- function(g, crs) {
+  p <- st_cast(st_sfc(g, crs = crs), "POLYGON") |> as.list()
+  Reduce(
+    function(a, b) {
+      st_sym_difference(st_sfc(a, crs = crs), st_sfc(b, crs = crs))[[1]]
+    },
+    p
+  )
+}
+
+# ggplot() +
+#   geom_sf(
+#     data = clean[nested_shells_idx][[1]],
+#     color = "blue",
+#     fill = "blue",
+#     alpha = 0.5,
+#     linewidth = 0.5
+#   )
+
+clean[nested_shells_idx] <- map(
+  clean[nested_shells_idx],
+  ~ fix_nested_shell(.x, crs = st_crs(clean))
+) |>
+  st_sfc()
+
+# ggplot() +
+#   geom_sf(
+#     data = clean[nested_shells_idx][[1]],
+#     color = "blue",
+#     fill = "blue",
+#     alpha = 0.5,
+#     linewidth = 0.5
+#   )
+```
+
+#### Hole Lies Outside Shell
+For these issues, holes were defined within the incorrect multipolygon part (not the one they are geographically within). These multipolygons have to be rebuilt with all the parts in the right places.
+
+```{r}
+# # Test methods for hole lies outside shell
+# ggplot() +
+#   geom_sf(
+#     data = clean[holes_outside_shell_idx][[1]],
+#     color = "blue",
+#     fill = "blue",
+#     alpha = 0.5,
+#     linewidth = 0.5
+#   )
+
+# Check that the visible overlapping polygons (meant to be holes) are assigned to the wrong polygon part
+# Any count greater than zero indicates a hole that is defined in a ring that it isn't `st_within()`
+holes_outside <- function(g) {
+  sapply(unclass(g), function(poly) {
+    if (length(poly) < 2) {
+      return(0L)
+    }
+    shell <- st_polygon(poly[1])
+    sum(
+      !vapply(
+        poly[-1],
+        function(h) {
+          st_within(st_polygon(list(h)), shell, sparse = FALSE)[1, 1]
+        },
+        logical(1)
+      )
+    )
+  })
+}
+
+holes_assigned_to_wrong_part <- lapply(
+  st_geometry(clean)[holes_outside_shell_idx],
+  holes_outside
+)
+# Yes, there are several geometries with holes that were assigned to the incorrect polygon
+
+# rebuild geometries with holes assigned to correct multipolygon parts
+rebuild_mp <- function(g) {
+  rings <- unlist(unclass(g), recursive = FALSE) # flat list of ring matrices
+  polys <- st_sfc(lapply(rings, \(r) st_polygon(list(r)))) # no CRS: planar tests
+  cont <- st_contains_properly(polys, polys, sparse = FALSE) # cont[i, j]: i contains j
+  depth <- colSums(cont)
+  area <- as.numeric(st_area(polys))
+
+  ext <- which(depth %% 2 == 0)
+  hol <- which(depth %% 2 == 1)
+
+  parent <- vapply(
+    hol,
+    function(h) {
+      cand <- ext[cont[ext, h]]
+      cand[which.min(area[cand])]
+    },
+    integer(1)
+  )
+
+  st_multipolygon(lapply(ext, \(e) c(rings[e], rings[hol[parent == e]])))
+}
+
+clean[holes_outside_shell_idx] <- map(
+  clean[holes_outside_shell_idx],
+  rebuild_mp
+) |>
+  st_sfc(crs = st_crs(clean))
+
+# # View to make sure the shape didn't get messed up in the process
+# ggplot() +
+#   geom_sf(
+#     data = clean[holes_outside_shell_idx][[1]],
+#     color = "blue",
+#     fill = "blue",
+#     alpha = 0.5,
+#     linewidth = 0.5
+#   )
+```
+
+#### Ring Self-intersection
+A simple `st_make_valid()` works for these remaining errors.
+
+```{r}
+# ggplot() +
+#   geom_sf(
+#     data = clean[self_intersections_idx][[1]],
+#     color = "blue",
+#     fill = "blue",
+#     alpha = 0.5,
+#     linewidth = 0.5
+#   )
+
+clean <- st_make_valid(clean)
+
+# ggplot() +
+#   geom_sf(
+#     data = clean[self_intersections_idx][[1]],
+#     color = "blue",
+#     fill = "blue",
+#     alpha = 0.5,
+#     linewidth = 0.5
+#   )
+```
+
+### Put Mountain Glaciers Data Back Together
+
+```{r}
+mountain_glaciers <- st_set_geometry(mountain_glaciers, clean)
+
+# checks
+sum(st_is_empty(mountain_glaciers)) # features that lost all parts
+all(st_is_valid(mountain_glaciers)) # remaining validity problems
+
+# Prep the file to join with ice sheets
+mountain_glaciers <- mountain_glaciers |>
+  st_transform(crs = 6931) |>
+  st_make_valid() |>
+  st_intersection(domain_south)
+
+ggplot() +
+  geom_sf(
+    data = mountain_glaciers,
+    aes(color = deglalow, fill = deglalow)
+  ) +
+  scale_color_viridis(name = "Deglaciation Date (Low)") +
+  scale_fill_viridis(name = "Deglaciation Date (Low)")
+```
+
+### Combine Ice Sheets and Moutain Glaciers
+
+```{r}
+all_glaciers <- ice_sheets |>
+  st_union() |>
+  st_sf() |>
+  st_union(
+    mountain_glaciers |>
+      st_union() |>
+      st_sf()
+  ) |>
+  st_sf()
+
+ggplot() +
+  geom_sf(
+    data = all_glaciers
+  )
+```
+
+### Save Glacier Layer
+
+```{r}
+st_write(
+  all_glaciers,
+  "./01_processed_data/all_glaciers_lgm.geojson"
+)
+```
+
