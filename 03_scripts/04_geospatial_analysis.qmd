@@ -11,9 +11,9 @@ format: html
 library(sf)
 library(spatstat)
 library(spopt)
+library(terra)
+library(tidyterra)
 library(tidyverse)
-# library(terra)
-# library(tidyterra)
 # library(ggnewscale)
 library(viridis)
 ```
@@ -43,6 +43,19 @@ rts_pt <- read_sf("./01_processed_data/high_prob_rts_pt.geojson")
 
 ```{r}
 domain <- st_read("./01_processed_data/domain_clean.geojson")
+```
+
+## Environmental Predictors
+
+```{r}
+env_pred <- rast(
+  "./01_processed_data/rts_rep_input_data_6931.tif"
+)
+
+env_pred <- env_pred |>
+  select(-names(env_pred)[which(str_detect(names(env_pred), "b1"))]) |>
+  select(-names(env_pred)[which(str_detect(names(env_pred), "suitable"))]) |>
+  select(-"hillslope_thermokarst")
 ```
 
 ## NaturalEarth
@@ -186,7 +199,7 @@ ggplot(
     transform = "log10"
   ) +
   scale_y_continuous(
-    name = "Count",
+    name = "Percent",
     expand = expansion(mult = c(0, 0.05)),
     labels = scales::percent
   )
@@ -256,7 +269,9 @@ Try 10 km x 10 km grids to start.
 rts_grid <- st_read("./01_processed_data/rts_grid.geojson")
 ```
 
-## Gridded RTS Counts
+## Gridded Variables
+
+### RTS Counts
 
 ```{r}
 rts_grid <- rts_grid |>
@@ -274,8 +289,8 @@ rts_grid <- rts_grid |>
 ```{r}
 ggplot(
   rts_grid |>
-    filter(RTSCount > 1),
-  aes(x = RTSCount)
+    filter(rts_count > 1),
+  aes(x = rts_count)
 ) +
   geom_histogram()
 
@@ -283,7 +298,7 @@ ggplot() +
   geom_sf(data = world_north) +
   geom_sf(
     data = rts_grid,
-    aes(color = RTSCount, fill = RTSCount)
+    aes(color = rts_count, fill = rts_count)
   ) +
   scale_color_viridis(
     name = "RTS Count",
@@ -304,6 +319,65 @@ ggplot() +
   ) +
   # coord_sf(expand = FALSE) +
   theme_void()
+```
+
+### Environmental Variables
+
+```{r}
+# ggplot() +
+#   # geom_sf(
+#   #   data = world_north
+#   # ) +
+#   geom_spatraster(
+#     data = env_pred |>
+#       crop(vect(rts_grid |> slice(0:5))),
+#     aes(fill = tmin_min)
+#   ) +
+#   scale_fill_continuous(na.value = "transparent") +
+#   geom_sf(
+#     data = rts_grid |> slice(0:5),
+#     fill = "transparent"
+#   )
+
+# env_pred_100km <- terra::extract(
+#   env_pred,
+#   vect(rts_grid),
+#   fun = mean,
+#   exact = TRUE,
+#   na.rm = TRUE
+# )
+
+# write_csv(
+#   env_pred_10km,
+#   "./01_processed_data/env_predictors_rts_grid_aligned.csv"
+# )
+env_pred_100km <- read_csv(
+  "./01_processed_data/env_predictors_rts_grid_aligned.csv"
+) |>
+  select(-ID)
+
+rts_grid <- rts_grid |>
+  bind_cols(env_pred_100km)
+```
+
+```{r}
+ggplot() +
+  geom_spatraster(
+    data = env_pred,
+    aes(fill = tmin_min)
+  ) +
+  scale_fill_viridis(
+    na.value = "transparent"
+  ) +
+  geom_sf(
+    data = domain,
+    fill = "transparent"
+  ) +
+  coord_sf(
+    expand = FALSE,
+    xlim = c(st_bbox(domain)["xmin"], st_bbox(domain)["xmax"]),
+    ylim = c(st_bbox(domain)["ymin"], st_bbox(domain)["ymax"])
+  )
 ```
 
 ## SKATER
@@ -352,3 +426,5 @@ ggplot() +
   # coord_sf(expand = FALSE) +
   theme_void()
 ```
+
+# Regional Characteristics

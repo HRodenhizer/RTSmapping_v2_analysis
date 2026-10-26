@@ -1,0 +1,383 @@
+---
+title: "5_input_data_compile_and_crop"
+author: "Heidi Rodenhizer"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Load Libraries
+
+```{r}
+library(terra)
+library(tidyterra)
+library(sf)
+library(lwgeom)
+library(viridis)
+library(ggthemes)
+library(tidyverse)
+```
+
+```{r}
+theme_set(theme_bw())
+```
+
+
+# Load Extent
+
+```{r}
+domain <- st_read("./01_processed_data/domain_full_clean.geojson")
+
+# Transforming the CRS from a polar projection to WGS84 causes
+# incorrect polygons where Russia crosses the 180th meridian.
+# Remove a polygon extending from -180 to 180 prior to
+# transforming the CRS to solve this problem.
+# Order of the points matters for whether this is a polygon of
+# infinite thinness (current) or whole globe (not as written)
+split_poly <- st_sfc(
+  st_polygon(list(matrix(
+    c(180, 0, -180, 0, -180, 90, 180, 90, 180, 0),
+    ncol = 2,
+    byrow = TRUE
+  ))),
+  crs = 'EPSG:4326'
+) |>
+  st_transform(crs = st_crs(domain))
+
+domain_4326 <- domain |>
+  st_cast('POLYGON') |>
+  st_difference(split_poly) |>
+  st_transform('EPSG:4326')
+```
+
+```{r}
+ggplot(domain) +
+  geom_sf() +
+  coord_sf(expand = FALSE)
+
+ggplot(domain_4326) +
+  geom_sf() +
+  coord_sf(expand = FALSE)
+```
+
+
+# Load Raster Data
+
+## TerraClimate
+
+```{r}
+terraclimate <- rast(
+  '../rts_rep_analysis/input_data/TerraClimate/TerraClimateCompiled.tif'
+) |>
+  crop(domain_4326) |>
+  mask(domain_4326)
+```
+
+```{r}
+terraclimate <- terraclimate |>
+  project(y = 'EPSG:6931', res = 1000, method = 'bilinear')
+```
+
+```{r}
+map(
+  names(terraclimate),
+  ~ ggplot() +
+    geom_spatraster(
+      data = terraclimate |>
+        subset(.x)
+    ) +
+    scale_fill_viridis(name = .x, na.value = 'transparent') +
+    facet_wrap(~lyr) +
+    coord_sf(expand = FALSE)
+)
+```
+
+
+## Copernicus Topography
+
+```{r}
+coptopo <- rast(
+  '../rts_rep_analysis/input_data/Copernicus_DEM/CopernicusDEMCompiled.tif'
+) |>
+  crop(domain_4326) |>
+  mask(domain_4326)
+
+names(coptopo) <- c('suitable_slope', 'suitable_tpi')
+```
+
+```{r}
+coptopo <- coptopo |>
+  project(y = 'EPSG:6931', res = 1000, method = 'bilinear')
+```
+
+```{r}
+map(
+  names(coptopo),
+  ~ ggplot() +
+    geom_spatraster(
+      data = coptopo |>
+        subset(.x)
+    ) +
+    scale_fill_viridis(name = .x, na.value = 'transparent') +
+    facet_wrap(~lyr) +
+    coord_sf(expand = FALSE)
+)
+```
+
+
+## MODIS LST
+
+```{r}
+modislst <- rast(
+  '../rts_rep_analysis/input_data/MODIS_LST/MODISLSTCompiled.tif'
+) |>
+  crop(domain_4326) |>
+  mask(domain_4326)
+```
+
+```{r}
+modislst <- modislst |>
+  project(y = 'EPSG:6931', res = 1000, method = 'bilinear')
+```
+
+```{r}
+map(
+  names(modislst),
+  ~ ggplot() +
+    geom_spatraster(
+      data = modislst |>
+        subset(.x)
+    ) +
+    scale_fill_viridis(name = .x, na.value = 'transparent') +
+    facet_wrap(~lyr) +
+    coord_sf(expand = FALSE)
+)
+```
+
+## NIEER Permafrost (Ran et al. 2022)
+
+```{r}
+files <- list.files(
+  '../rts_rep_analysis/input_data/NIEERPermafrost/NIEER_permafrost_dataset_released',
+  full.names = TRUE,
+  pattern = 'tif$'
+)
+
+nieer <- files |>
+  map(~ rast(.x)) |>
+  rast() |>
+  crop(domain_4326) |>
+  mask(domain_4326) |>
+  project(terraclimate)
+
+names(nieer) <- c('alt', 'magt', 'permafrost_prob')
+```
+
+```{r}
+nieer <- nieer |>
+  project(y = 'EPSG:6931', res = 1000, method = 'bilinear')
+```
+
+```{r}
+map(
+  names(nieer),
+  ~ ggplot() +
+    geom_spatraster(
+      data = nieer |>
+        subset(.x)
+    ) +
+    scale_fill_viridis(name = .x, na.value = 'transparent') +
+    facet_wrap(~lyr) +
+    coord_sf(expand = FALSE)
+)
+```
+
+
+## Soil Grids
+
+```{r}
+soilgrids <- rast(
+  '../rts_rep_analysis/input_data/SoilGridsV2/SoilGridsV2Compiled.tif'
+) |>
+  crop(domain_4326) |>
+  mask(domain_4326)
+```
+
+```{r}
+soilgrids <- soilgrids |>
+  project(y = 'EPSG:6931', res = 1000, method = 'bilinear')
+```
+
+```{r}
+map(
+  names(soilgrids),
+  ~ ggplot() +
+    geom_spatraster(
+      data = soilgrids |>
+        subset(.x)
+    ) +
+    scale_fill_viridis(name = .x, na.value = 'transparent') +
+    facet_wrap(~lyr) +
+    coord_sf(expand = FALSE)
+)
+```
+
+# Load Vector Data
+
+## Brown Permafrost
+
+```{r}
+brown <- st_read(
+  '../rts_rep_analysis/input_data/BrownCircumArcticPermafrost/permaice.shp'
+)
+brown <- brown |>
+  filter(CONTENT %in% c('l', 'm', 'h')) |>
+  mutate(
+    ice_content = case_when(
+      CONTENT == 'l' ~ 1,
+      CONTENT == 'm' ~ 2,
+      CONTENT == 'h' ~ 3,
+      TRUE ~ 0
+    )
+  ) |>
+  st_transform(st_crs(terraclimate)) |>
+  rasterize(terraclimate, field = 'ice_content', background = 0) |>
+  mask(domain)
+```
+
+```{r}
+ggplot() +
+  geom_spatraster(data = brown) +
+  scale_fill_viridis(name = 'Ice Content', na.value = 'transparent') +
+  coord_sf(expand = FALSE)
+```
+
+
+## Olefeldt Thermokarst Map
+
+```{r}
+thermokarst <- st_read(
+  '../rts_rep_analysis/input_data/OlefeldtThermokarstMap/data/Circumpolar_Thermokarst_Landscapes_epsg3413.shp'
+) |>
+  mutate(
+    hillslope_thermokarst = case_when(
+      TKHP == 'High' ~ 3,
+      TKHP == 'Moderate' ~ 2,
+      TKHP == 'Low' ~ 1,
+      TKHP == 'None' ~ 0,
+      TRUE ~ 0
+    )
+  ) |>
+  st_transform(st_crs(terraclimate)) |>
+  rasterize(terraclimate, field = 'hillslope_thermokarst', background = 0) |>
+  mask(domain)
+```
+
+```{r}
+ggplot() +
+  geom_spatraster(data = thermokarst) +
+  scale_fill_viridis(
+    name = 'Thermokarst\nLandscapes ',
+    na.value = 'transparent'
+  ) +
+  coord_sf(expand = FALSE)
+```
+
+
+## Yedoma
+
+```{r}
+yedoma <- st_read(
+  '../rts_rep_analysis/input_data/IRYP_v2_yedoma/IRYP_v2_yedoma_domain_Shapefile/IRYP_v2_yedoma_domain.shp'
+) |>
+  st_transform(st_crs(terraclimate)) |>
+  rasterize(terraclimate, background = 0) |>
+  mask(domain)
+names(yedoma) <- c('yedoma_domain')
+```
+
+```{r}
+ggplot() +
+  geom_spatraster(
+    data = yedoma |>
+      subset('yedoma_domain')
+  ) +
+  scale_fill_viridis(name = 'Yedoma\nDomain', na.value = 'transparent') +
+  coord_sf(expand = FALSE)
+```
+
+## Glacial Extent LGM
+
+```{r}
+glaciers <- st_read(
+  './01_processed_data/all_glaciers_lgm.geojson'
+) |>
+  rasterize(terraclimate, background = 0) |>
+  mask(domain)
+names(glaciers) <- c('glacial_extent_lgm')
+```
+
+```{r}
+ggplot() +
+  geom_spatraster(
+    data = glaciers |>
+      subset('glacial_extent_lgm')
+  ) +
+  scale_fill_viridis(name = 'Glacial\nExtent\nLGM', na.value = 'transparent') +
+  coord_sf(expand = FALSE)
+```
+
+# Combine All Layers
+
+```{r}
+env_pred_data <- c(
+  terraclimate,
+  coptopo,
+  modislst,
+  nieer,
+  soilgrids,
+  brown,
+  thermokarst,
+  yedoma,
+  glaciers
+) |>
+  mask(nieer[['alt']])
+```
+
+```{r}
+env_pred_rescale <- scale(env_pred_data)
+```
+
+```{r}
+ggplot() +
+  geom_spatraster(data = env_pred_rescale) +
+  scale_fill_viridis(
+    name = 'z-score',
+    limits = c(-2, 2),
+    na.value = 'transparent',
+    oob = scales::squish
+  ) +
+  facet_wrap(~lyr, ncol = 7) +
+  coord_sf(expand = FALSE) +
+  theme(
+    legend.position = 'bottom' #,
+    # legend.position.inside = c(0.9, -0.01),
+    # legend.justification.inside = c(0.5, 0),
+    # legend.title.position = 'left',
+    # legend.title = element_text(angle = 90, hjust = 0.5)
+  )
+
+# ggsave('./figures/input_layers.jpg',
+#        height = 9,
+#        width = 6.5)
+# ggsave('./figures/input_layers.pdf',
+#        height = 9,
+#        width = 6.5)
+```
+
+```{r}
+# writeRaster(env_pred_data,
+#             './01_processed_data/env_pred_6931.tif')
+# writeRaster(env_pred_rescale,
+#            './01_processed_data/env_pred_rescale_6931.tif')
+```
+

@@ -139,7 +139,57 @@ domain_south <- domain_south |>
 
 # st_write(
 #   domain_south,
-#   "./01_processed_data/domain_clean.geojson"
+#   "./01_processed_data/domain_south_clean.geojson"
+# )
+```
+
+```{r}
+domain <- domain |>
+  st_transform(4326) |>
+  st_cast("POLYGON") |>
+  mutate(id = 1:n())
+
+ggplot() +
+  geom_sf(
+    data = domain,
+    aes(fill = id)
+  ) +
+  scale_fill_viridis(limits = c(443, 446)) +
+  coord_sf(crs = 6931)
+
+# 331 is kamchatka, 444 is Wrangell East, 445 is Wrangell West, 446 is mainland Russia
+domain$geometry[331] <- fix_geometry_at_origin(
+  domain$geometry[331],
+  dist = 0.000014
+)
+domain$geometry[444] <- fix_geometry_at_origin(
+  domain$geometry[444],
+  dist = 0.000014
+)
+domain$geometry[445] <- fix_geometry_at_origin(
+  domain$geometry[445],
+  dist = 0.000014
+)
+domain$geometry[446] <- fix_geometry_at_origin(
+  domain$geometry[446],
+  dist = 0.000014
+)
+
+domain <- domain |>
+  select(-id) |>
+  summarise(
+    geometry = st_union(domain)
+  ) |>
+  st_transform(st_crs(rts))
+
+ggplot() +
+  geom_sf(
+    data = domain
+  )
+
+# st_write(
+#   domain,
+#   "./01_processed_data/domain_full_clean.geojson"
 # )
 ```
 
