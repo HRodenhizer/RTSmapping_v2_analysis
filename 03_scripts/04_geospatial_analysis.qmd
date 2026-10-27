@@ -389,3 +389,29 @@ ggplot() +
 ```
 
 # Regional Characteristics
+
+## Size and Shape by Region
+Options for measuring shape:
+Polsby-Popper (area compared to square with same perimeter; just need area and perimeter)
+Reock (area compared to smallest square containing the shape; need full geometry)
+Convex Hull (area compared to area of convex hull of shape; need full geometry)
+CIRCLE (area compared to area of smallest circumscribing circle; need full geometry)
+
+```{r}
+extracted_regions <- rts_pt |>
+  st_join(rts_regions |> select(.region)) |>
+  mutate(
+    pp = area_m2 / (perimeter_m / 2)^2
+  )
+```
+
+```{r}
+ggplot(extracted_regions, aes(x = .region, y = pp)) +
+  geom_violin()
+```
+
+```{r}
+
+```
+
+## RTS Type by Region?
