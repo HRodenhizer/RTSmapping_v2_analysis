@@ -106,7 +106,7 @@ names(coptopo) <- c('suitable_slope', 'suitable_tpi')
 
 ```{r}
 coptopo <- coptopo |>
-  project(y = 'EPSG:6931', res = 1000, method = 'bilinear')
+  project(y = terraclimate, res = 1000, method = 'bilinear')
 ```
 
 ```{r}
@@ -136,7 +136,7 @@ modislst <- rast(
 
 ```{r}
 modislst <- modislst |>
-  project(y = 'EPSG:6931', res = 1000, method = 'bilinear')
+  project(y = terraclimate, res = 1000, method = 'bilinear')
 ```
 
 ```{r}
@@ -174,7 +174,7 @@ names(nieer) <- c('alt', 'magt', 'permafrost_prob')
 
 ```{r}
 nieer <- nieer |>
-  project(y = 'EPSG:6931', res = 1000, method = 'bilinear')
+  project(y = terraclimate, res = 1000, method = 'bilinear')
 ```
 
 ```{r}
@@ -204,7 +204,7 @@ soilgrids <- rast(
 
 ```{r}
 soilgrids <- soilgrids |>
-  project(y = 'EPSG:6931', res = 1000, method = 'bilinear')
+  project(y = terraclimate, res = 1000, method = 'bilinear')
 ```
 
 ```{r}
