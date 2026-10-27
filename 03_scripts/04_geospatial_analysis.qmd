@@ -36,20 +36,20 @@ theme_set(theme_bw())
 ## RTS
 
 ```{r}
-rts_pt <- read_sf("./01_processed_data/high_prob_rts_pt.geojson")
+rts_pt <- st_read("./01_processed_data/high_prob_rts_pt.geojson")
 ```
 
 ## Domain
 
 ```{r}
-domain <- st_read("./01_processed_data/domain_clean.geojson")
+domain <- st_read("./01_processed_data/domain_south_clean.geojson")
 ```
 
 ## Environmental Predictors
 
 ```{r}
 env_pred <- rast(
-  "./01_processed_data/rts_rep_input_data_6931.tif"
+  "./01_processed_data/env_pred_rescale_6931.tif"
 )
 
 env_pred <- env_pred |>
@@ -210,7 +210,7 @@ ggplot(
 This section creates RTS regions (spatially contiguous hotspot and coldspot regions) using the SKATER (Spatial 'K'luster Analysis by Tree Edge Removal) algorithm. Since RTS count is the attribute of interest for this clustering, I have first gridded the entire region and extracted RTS counts. 
 
 ## Create Grid
-Try 10 km x 10 km grids to start.
+Try 100 km x 100 km grids to start.
 
 ```{r}
 # rts_grid <- domain |>
@@ -324,90 +324,45 @@ ggplot() +
 ### Environmental Variables
 
 ```{r}
-# ggplot() +
-#   # geom_sf(
-#   #   data = world_north
-#   # ) +
-#   geom_spatraster(
-#     data = env_pred |>
-#       crop(vect(rts_grid |> slice(0:5))),
-#     aes(fill = tmin_min)
-#   ) +
-#   scale_fill_continuous(na.value = "transparent") +
-#   geom_sf(
-#     data = rts_grid |> slice(0:5),
-#     fill = "transparent"
-#   )
-
 # env_pred_100km <- terra::extract(
 #   env_pred,
 #   vect(rts_grid),
 #   fun = mean,
 #   exact = TRUE,
 #   na.rm = TRUE
-# )
+# ) |>
+#   select(-ID)
 
 # write_csv(
-#   env_pred_10km,
+#   env_pred_100km,
 #   "./01_processed_data/env_predictors_rts_grid_aligned.csv"
 # )
 env_pred_100km <- read_csv(
   "./01_processed_data/env_predictors_rts_grid_aligned.csv"
-) |>
-  select(-ID)
+)
 
 rts_grid <- rts_grid |>
   bind_cols(env_pred_100km)
-```
-
-```{r}
-ggplot() +
-  geom_spatraster(
-    data = env_pred,
-    aes(fill = tmin_min)
-  ) +
-  scale_fill_viridis(
-    na.value = "transparent"
-  ) +
-  geom_sf(
-    data = domain,
-    fill = "transparent"
-  ) +
-  coord_sf(
-    expand = FALSE,
-    xlim = c(st_bbox(domain)["xmin"], st_bbox(domain)["xmax"]),
-    ylim = c(st_bbox(domain)["ymin"], st_bbox(domain)["ymax"])
-  )
 ```
 
 ## SKATER
 
 ```{r}
 rts_regions <- skater(
-  rts_grid,
-  attrs = c("rts_count_log10"),
+  rts_grid |>
+    select(rts_count_log10, glacial_extent_lgm, ecoregions),
+  # attrs = c("rts_count_log10"),
   weights = "rook",
-  n_regions = 1,
+  n_regions = 14,
   bridge_islands = TRUE,
   seed = 42
-)
+) |>
+  summarize(geometry = st_union(geometry), .by = .region)
 ```
 
 ```{r}
 ggplot() +
   geom_sf(data = world_north) +
-  # geom_sf(
-  #   data = rts_grid,
-  #   aes(color = RTSCount, fill = RTSCount)
-  # ) +
-  # scale_color_viridis(
-  #   name = "RTS Count",
-  #   trans = "log10"
-  # ) +
-  # scale_fill_viridis(
-  #   name = "RTS Count",
-  #   trans = "log10"
-  # ) +
   geom_sf(
     data = rts_regions,
     aes(color = .region, fill = .region)
@@ -425,6 +380,12 @@ ggplot() +
   ) +
   # coord_sf(expand = FALSE) +
   theme_void()
+```
+
+## TODO: Name Regions
+
+```{r}
+
 ```
 
 # Regional Characteristics
