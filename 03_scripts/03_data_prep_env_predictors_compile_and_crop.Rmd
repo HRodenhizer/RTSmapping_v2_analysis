@@ -339,6 +339,71 @@ ggplot() +
   coord_sf(expand = FALSE)
 ```
 
+## Arctic Boreal Regions
+
+```{r}
+arctic_boreal <- st_read(
+  "../../tundra_and_boreal_domain/tundra_and_boreal.shp"
+) |>
+  mutate(
+    biome = case_when(
+      BIOME_NAME == "Tundra" ~ 1,
+      BIOME_NAME == "Boreal Forests/Taiga" ~ 2
+    )
+  ) |>
+  st_transform(st_crs(terraclimate)) |>
+  rasterize(y = terraclimate, field = "biome", touches = TRUE) |>
+  mask(domain)
+names(arctic_boreal) <- c('arctic_boreal')
+```
+
+```{r}
+ggplot() +
+  geom_spatraster(
+    data = arctic_boreal |>
+      subset('arctic_boreal')
+  ) +
+  scale_fill_viridis(name = 'Arctic\nBoreal', na.value = 'transparent') +
+  coord_sf(expand = FALSE)
+```
+
+## Ecoregions (Dinerstein et al. 2017)
+
+```{r}
+ecoregions <- st_read("../../Ecoregions2017/Ecoregions2017.shp") |>
+  st_make_valid() |>
+  filter(
+    BIOME_NAME %in% c("Tundra", "Boreal Forests/Taiga") & REALM != "Antarctica"
+  ) |>
+  mutate(eco_id = as.numeric(factor(ECO_NAME)))
+
+eco_ids <- ecoregions |>
+  st_drop_geometry() |>
+  select(ECO_NAME, ECO_ID) |>
+  distinct()
+
+ecoregions <- ecoregions |>
+  st_transform(st_crs(terraclimate)) |>
+  rasterize(terraclimate, field = "eco_id", touches = TRUE) |>
+  mask(domain) |>
+  classify(matrix(c(eco_ids$ECO_ID, eco_ids$ECO_NAME), ncol = 2))
+names(ecoregions) <- c('ecoregions')
+```
+
+```{r}
+ggplot() +
+  geom_spatraster(
+    data = ecoregions
+  ) +
+  scale_fill_viridis(
+    name = 'Ecoregions',
+    na.value = 'transparent',
+    guide = "none"
+  ) +
+  coord_sf(expand = FALSE)
+```
+
+
 # Combine All Layers
 
 ```{r}
@@ -351,9 +416,10 @@ env_pred_data <- c(
   brown,
   thermokarst,
   yedoma,
-  glaciers
-) |>
-  mask(nieer[['alt']])
+  glaciers,
+  arctic_boreal,
+  ecoregions
+)
 ```
 
 ```{r}
