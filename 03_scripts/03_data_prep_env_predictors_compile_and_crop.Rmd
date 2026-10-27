@@ -162,14 +162,27 @@ files <- list.files(
   pattern = 'tif$'
 )
 
-nieer <- files |>
-  map(~ rast(.x)) |>
+nieer <- map(
+  files,
+  ~ rast(.x)
+) |>
   rast() |>
   crop(domain_4326) |>
-  mask(domain_4326) |>
-  project(terraclimate)
+  mask(domain_4326)
 
 names(nieer) <- c('alt', 'magt', 'permafrost_prob')
+```
+
+Make sure that there are only NAs where appropriate.
+ALT should be NA outside of areas with a possibility of permafrost (no change needed).
+MAGT already has values outside permafrost region (no change needed).
+Current NAs in permafrost prob should be 0 instead of NA if there is a MAGT (to ensure we don't fill in lakes). 
+```{r}
+nieer[["permafrost_prob"]] <- ifel(
+  !is.na(nieer["permafrost_prob"]),
+  nieer["permafrost_prob"],
+  ifel(!is.na(nieer["magt"]), 0, NA)
+)
 ```
 
 ```{r}
