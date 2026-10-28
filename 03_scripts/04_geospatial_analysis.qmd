@@ -349,15 +349,21 @@ rts_grid <- rts_grid |>
 
 ```{r}
 rts_regions <- skater(
-  rts_grid |>
+  rts_grid %>%
     select(rts_count_log10, glacial_extent_lgm, ecoregions),
   # attrs = c("rts_count_log10"),
   weights = "rook",
   n_regions = 14,
   bridge_islands = TRUE,
   seed = 42
-) |>
-  summarize(geometry = st_union(geometry), .by = .region)
+) %>%
+  summarize(geometry = st_union(geometry), .by = .region) %>%
+  mutate(centroid = st_centroid(geometry)) %>%
+  bind_cols(
+    .$centroid %>%
+      st_transform(4326) %>%
+      st_coordinates
+  )
 ```
 
 ```{r}
@@ -392,26 +398,108 @@ ggplot() +
 
 ## Size and Shape by Region
 Options for measuring shape:
-Polsby-Popper (area compared to square with same perimeter; just need area and perimeter)
+Polsby-Popper (area compared to circle with same perimeter; just need area and perimeter)
 Reock (area compared to smallest square containing the shape; need full geometry)
 Convex Hull (area compared to area of convex hull of shape; need full geometry)
 CIRCLE (area compared to area of smallest circumscribing circle; need full geometry)
 
+I will start with Polsby-Popper as I have used previously due to it's simplicity.
 ```{r}
-extracted_regions <- rts_pt |>
-  st_join(rts_regions |> select(.region)) |>
+rts_pt <- rts_pt |>
+  st_join(rts_regions |> select(.region, region_lon = X, region_lat = Y)) |>
   mutate(
-    pp = area_m2 / (perimeter_m / 2)^2
+    pp = (4 * pi * area_m2) / perimeter_m^2
+  )
+
+rts_regions <- rts_regions |>
+  full_join(
+    rts_pt |>
+      st_drop_geometry() |>
+      summarise(
+        mean_pp = mean(pp),
+        mean_area_m2 = mean(area_m2),
+        .by = .region
+      ),
+    by = ".region"
   )
 ```
 
+Size by Region
+
 ```{r}
-ggplot(extracted_regions, aes(x = .region, y = pp)) +
-  geom_violin()
+ggplot(rts_pt, aes(x = .region, y = area_m2)) +
+  geom_violin() +
+  scale_x_discrete(name = "Region") +
+  scale_y_continuous(name = expression("Area (m"^2 * ")"))
+
+ggplot(
+  rts_pt,
+  aes(x = area_m2, y = round(region_lat, 2), group = round(region_lat, 2))
+) +
+  geom_violin() +
+  scale_x_continuous(name = expression("Area (m"^2 * ")")) +
+  scale_y_continuous(name = "Region Latitude (Centroid)")
 ```
 
 ```{r}
-
+ggplot() +
+  geom_sf(data = world_north) +
+  geom_sf(
+    data = rts_regions,
+    aes(color = mean_area_m2, fill = mean_area_m2)
+  ) +
+  scale_color_viridis(name = expression("Area (m"^2 * ")")) +
+  scale_fill_viridis(name = expression("Area (m"^2 * ")")) +
+  geom_sf(
+    data = world_north,
+    fill = "transparent"
+  ) +
+  geom_sf(
+    data = crop_poly,
+    color = "black",
+    fill = "transparent"
+  ) +
+  # coord_sf(expand = FALSE) +
+  theme_void()
 ```
 
-## RTS Type by Region?
+Shape by Region
+
+```{r}
+ggplot(rts_pt, aes(x = .region, y = pp)) +
+  geom_violin() +
+  scale_x_discrete(name = "Region") +
+  scale_y_continuous(name = expression("Shape"))
+
+ggplot(
+  rts_pt,
+  aes(x = pp, y = round(region_lat, 2), group = round(region_lat, 2))
+) +
+  geom_violin() +
+  scale_x_continuous(name = expression("Shape")) +
+  scale_y_continuous(name = "Region Latitude (Centroid)")
+```
+
+```{r}
+ggplot() +
+  geom_sf(data = world_north) +
+  geom_sf(
+    data = rts_regions,
+    aes(color = mean_pp, fill = mean_pp)
+  ) +
+  scale_color_viridis(name = expression("Shape")) +
+  scale_fill_viridis(name = expression("Shape")) +
+  geom_sf(
+    data = world_north,
+    fill = "transparent"
+  ) +
+  geom_sf(
+    data = crop_poly,
+    color = "black",
+    fill = "transparent"
+  ) +
+  # coord_sf(expand = FALSE) +
+  theme_void()
+```
+
+## TODO: RTS Type by Region?
