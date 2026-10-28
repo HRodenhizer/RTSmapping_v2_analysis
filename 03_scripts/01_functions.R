@@ -121,3 +121,48 @@ rebuild_mp <- function(g) {
 
   st_multipolygon(lapply(ext, \(e) c(rings[e], rings[hol[parent == e]])))
 }
+
+# map_hex_grid
+map_hex_grid <- function(
+  data,
+  domain,
+  variable,
+  color_scale = scale_color_viridis,
+  fill_scale = scale_fill_viridis,
+  label,
+  transformation
+) {
+  ggplot() +
+    geom_sf(data = world_north) +
+    geom_sf(
+      data = data,
+      aes(color = .data[[variable]], fill = .data[[variable]])
+    ) +
+    color_scale(
+      name = label,
+      trans = transformation,
+      na.value = "transparent"
+    ) +
+    fill_scale(
+      name = label,
+      trans = transformation,
+      na.value = "transparent"
+    ) +
+    geom_sf(
+      data = world_north,
+      fill = "transparent"
+    ) +
+    geom_sf(
+      data = domain,
+      color = "black",
+      fill = "transparent",
+      linewidth = 0.5
+    ) +
+    geom_sf(
+      data = crop_poly,
+      color = "black",
+      fill = "transparent"
+    ) +
+    # coord_sf(expand = FALSE) +
+    theme_void()
+}

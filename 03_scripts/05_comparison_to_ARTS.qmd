@@ -1,0 +1,381 @@
+---
+title: "Comparison of Modeled and Observed RTS"
+format: html
+---
+
+# TODO:
+- Think about how best to visualize ratios of modeled to observed. Is bivariate better?
+- Investigate why not missed and shared counts are so different.
+
+# Set-Up
+
+## Libraries
+
+```{r}
+library(sf)
+library(tidyverse)
+library(viridis)
+```
+
+## Project Specific Functions
+
+```{r}
+source("03_scripts/01_functions.R")
+```
+
+## Plotting Defaults
+
+```{r}
+theme_set(theme_bw())
+```
+
+
+# Import Data
+
+## RTS
+
+```{r}
+rts_pt <- st_read("./01_processed_data/high_prob_rts_pt.geojson")
+rts_poly <- st_read("./01_processed_data/high_prob_rts_poly.geojson")
+```
+
+## ARTS
+
+```{r}
+arts <- st_read(
+  "../ARTS/ARTS_main_dataset/v.6.0.0/ARTS_main_dataset_v.6.0.0.geojson"
+) |>
+  st_transform(st_crs(rts_poly)) |>
+  filter(TrainClass == "Positive")
+```
+
+## Domain
+
+```{r}
+domain <- st_read("./01_processed_data/domain_south_clean.geojson")
+```
+
+## NaturalEarth
+
+```{r}
+world <- rnaturalearth::ne_countries(scale = "medium", returnclass = "sf") |>
+  select(name, continent, region_un, subregion)
+```
+
+```{r}
+crop_poly <- tibble(
+  geometry = st_sfc(st_point(c(0, 90)), crs = 'EPSG:4326')
+) %>%
+  st_sf() %>%
+  st_transform(crs = st_crs(rts_pt)) %>%
+  st_buffer(dist = 5250000) %>%
+  smoothr::densify(n = 3) %>%
+  st_transform(crs = 'EPSG:4326')
+
+crop_bbox <- crop_poly |>
+  st_transform(6931) |>
+  st_bbox()
+
+long_lines <- seq(-180, 180, by = 60) %>%
+  map(
+    ~ long_lines_from_coords(.x, lat_min = st_bbox(crop_poly)[2], lat_max = 90)
+  ) %>%
+  bind_rows()
+
+lat_lines <- seq(50, 90, by = 10) %>%
+  map(~ lat_lines_from_coords(.x, lon_min = -180, lon_max = 180)) %>%
+  bind_rows()
+```
+
+```{r}
+russia <- world |>
+  filter(name == "Russia") |>
+  st_cast("POLYGON") |>
+  mutate(id = 1:n())
+
+# West Wrangell Island is 29, East Wrangell Island is 31
+russia$geometry[29] <- fix_geometry_at_origin(russia$geometry[29], dist = 0.11)
+russia$geometry[31] <- fix_geometry_at_origin(russia$geometry[31], dist = 0.11)
+
+russia <- russia |>
+  select(-id)
+
+russia <- russia |>
+  summarise(
+    geometry = st_union(russia),
+    .by = c(name, continent, region_un, subregion)
+  )
+
+world <- world |>
+  filter(name != "Russia") |>
+  rbind(russia)
+
+
+world_north <- world %>%
+  st_make_valid() |>
+  st_intersection(crop_poly) %>%
+  st_transform(crs = st_crs(rts_pt))
+```
+
+# New RTS
+
+```{r}
+new_rts <- rts_poly |>
+  filter(lengths(st_intersects(rts_poly, arts)) == 0)
+```
+
+```{r}
+shared_rts_modeled <- rts_poly |>
+  filter(lengths(st_intersects(rts_poly, arts)) >= 1)
+
+shared_rts_observed <- arts |>
+  filter(lengths(st_intersects(arts, rts_poly)) >= 1)
+```
+
+```{r}
+missed_rts <- arts |>
+  filter(lengths(st_intersects(arts, rts_poly)) == 0)
+```
+
+Some stats:
+Make a table/infographic with these?
+```{r}
+(rts_count <- nrow(rts_poly))
+(arts_count <- nrow(arts))
+(new_rts_count <- nrow(new_rts))
+(shared_rts_modeled_count <- nrow(shared_rts_modeled))
+(shared_rts_observed_count <- nrow(shared_rts_observed))
+(missed_rts_count <- nrow(missed_rts))
+
+(percent_arts_found <- (arts_count - missed_rts_count) / arts_count)
+(percent_arts_missed <- missed_rts_count / arts_count)
+
+(percent_new <- new_rts_count / rts_count)
+
+(not_missed_to_shared_ratio <- shared_rts_observed_count /
+  shared_rts_modeled_count)
+```
+
+# Hex Grid Data Prep
+
+## Create Hex Grid
+
+```{r}
+hex_grids <- map(
+  c(100000, 50000, 10000),
+  ~ domain |>
+    st_make_grid(
+      cellsize = sqrt((.x * 2) / (sqrt(3))) * 1000, # get short side length of hexagon from area == 100,000 km^2, and convert to m
+      square = FALSE
+    ) |>
+    st_as_sf() |>
+    rename(geometry = x) |>
+    st_filter(domain) |>
+    mutate(idx = 1:n())
+)
+
+names(hex_grids) <- c("hex_grid_100k", "hex_grid_50k", "hex_grid_10k")
+```
+
+## Extract Counts
+
+Get counts of modeled RTS, observed RTS (ARTS), shared RTS (base: modeled), shared RTS (base: observed/ARTS), new RTS, and missed RTS.
+
+```{r}
+hex_grids <- map(
+  hex_grids,
+  ~ .x |>
+    # modeled RTS count
+    left_join(
+      rts_poly |>
+        st_join(.x) |>
+        st_drop_geometry() |>
+        summarise(
+          rts_modeled_count = n(),
+          .by = idx
+        ),
+      by = "idx"
+    ) |>
+    # observed ARTS count
+    left_join(
+      arts |>
+        st_join(.x) |>
+        st_drop_geometry() |>
+        summarise(
+          arts_observed_count = n(),
+          .by = idx
+        ),
+      by = "idx"
+    ) |>
+    # shared RTS count (base:modeled)
+    left_join(
+      shared_rts_modeled |>
+        st_join(.x) |>
+        st_drop_geometry() |>
+        summarise(
+          shared_rts_modeled_count = n(),
+          .by = idx
+        ),
+      by = "idx"
+    ) |>
+    # shared RTS count (base:observed/ARTS)
+    left_join(
+      shared_rts_observed |>
+        st_join(.x) |>
+        st_drop_geometry() |>
+        summarise(
+          shared_rts_observed_count = n(),
+          .by = idx
+        ),
+      by = "idx"
+    ) |>
+    # new RTS count
+    left_join(
+      new_rts |>
+        st_join(.x) |>
+        st_drop_geometry() |>
+        summarise(
+          new_rts_count = n(),
+          .by = idx
+        ),
+      by = "idx"
+    ) |>
+    # missed RTS count
+    left_join(
+      missed_rts |>
+        st_join(.x) |>
+        st_drop_geometry() |>
+        summarise(
+          missed_rts_count = n(),
+          .by = idx
+        ),
+      by = "idx"
+    ) |>
+    mutate(
+      missed_rts_percent = missed_rts_count / arts_observed_count,
+      new_rts_percent = new_rts_count / arts_observed_count,
+      modeled_to_observed_ratio = rts_modeled_count / arts_observed_count,
+      .before = geometry
+    )
+)
+```
+
+## Hex Domains
+
+```{r}
+hex_domains <- map(
+  hex_grids,
+  ~ .x |>
+    st_union() |>
+    st_as_sf() |>
+    rename(geometry = x)
+)
+```
+
+# Maps
+Iterate over all hex grid sizes and 
+
+```{r}
+hex_maps <- map2(
+  hex_grids,
+  hex_domains,
+  function(.x, .y) {
+    list(
+      ### Data Subsets
+      # RTS Count (Modeled)
+      map_hex_grid(
+        .x,
+        .y,
+        variable = "rts_modeled_count",
+        label = "RTS Count\n(Modeled)",
+        transformation = "log10"
+      ),
+
+      # ARTS Count (Observed)
+      map_hex_grid(
+        .x,
+        .y,
+        variable = "arts_observed_count",
+        label = "ARTS Count\n(Observed)",
+        transformation = "log10"
+      ),
+
+      # Shared RTS Count (base: modeled)
+      map_hex_grid(
+        .x,
+        .y,
+        variable = "shared_rts_modeled_count",
+        label = "Shared RTS\nCount\n(Modeled)",
+        transformation = "log10"
+      ),
+
+      # Shared RTS Count (base: observed)
+      map_hex_grid(
+        .x,
+        .y,
+        variable = "shared_rts_observed_count",
+        label = "Shared RTS\nCount\n(Observed)",
+        transformation = "log10"
+      ),
+
+      # New RTS Count
+      map_hex_grid(
+        .x,
+        .y,
+        variable = "new_rts_count",
+        label = "New RTS\nCount",
+        transformation = "log10"
+      ),
+
+      # Missed RTS Count
+      map_hex_grid(
+        .x,
+        .y,
+        variable = "missed_rts_count",
+        label = "Missed RTS\nCount",
+        transformation = "log10"
+      ),
+
+      ### Dataset Comparison (Ratios and Percents)
+      # Missed RTS percent
+      map_hex_grid(
+        .x,
+        .y,
+        variable = "missed_rts_percent",
+        label = "Missed RTS\n(Percent)",
+        transformation = "identity"
+      ),
+
+      # New RTS Percent
+      # Blue means we found more new RTS than we already knew about, red means we found fewer new RTS than we already knew about
+      map_hex_grid(
+        .x,
+        .y,
+        variable = "new_rts_percent",
+        color_scale = scale_color_gradient2,
+        fill_scale = scale_fill_gradient2,
+        label = "New RTS\n(Percent)",
+        transformation = "log10"
+      ),
+
+      # Modeled to Observed Ratio
+      # Blue means we found more RTS (total, not just new) than we already knew about, red means we found fewer RTS (total, not just new) than we already knew about
+      map_hex_grid(
+        .x,
+        .y,
+        variable = "modeled_to_observed_ratio",
+        color_scale = scale_color_gradient2,
+        fill_scale = scale_fill_gradient2,
+        label = "Modeled to\nObserved Ratio",
+        transformation = "log10"
+      )
+    )
+  }
+)
+
+hex_maps
+```
+
+
+# Why are Not-Missed and Shared numbers so different?
+Try dividing shared count (observed) by shared count (modeled) and mapping the results to look for places with high values.
