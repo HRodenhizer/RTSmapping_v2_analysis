@@ -14,7 +14,6 @@ library(spopt)
 library(terra)
 library(tidyterra)
 library(tidyverse)
-# library(ggnewscale)
 library(viridis)
 ```
 
@@ -392,6 +391,15 @@ ggplot() +
 
 ```{r}
 
+```
+
+## Save Regions
+
+```{r}
+# st_write(
+#   rts_regions,
+#   "./01_processed_data/rts_regions.geojson"
+# )
 ```
 
 # Regional Characteristics
