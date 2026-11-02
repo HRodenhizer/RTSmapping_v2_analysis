@@ -4,7 +4,6 @@ format: html
 ---
 
 # TODO:
-- Think about how best to visualize ratios of modeled to observed. Is bivariate better?
 - Investigate why not missed and shared counts are so different.
 
 # Set-Up
@@ -15,6 +14,8 @@ format: html
 library(sf)
 library(tidyverse)
 library(viridis)
+library(biscale)
+library(patchwork)
 ```
 
 ## Project Specific Functions
@@ -190,8 +191,11 @@ hex_grids <- map(
       rts_poly |>
         st_join(.x) |>
         st_drop_geometry() |>
+        mutate(pp = (4 * pi * area_m2) / perimeter_m^2) |>
         summarise(
           rts_modeled_count = n(),
+          rts_modeled_area = median(area_m2),
+          rts_modeled_pp = median(pp),
           .by = idx
         ),
       by = "idx"
@@ -255,8 +259,94 @@ hex_grids <- map(
       missed_rts_percent = missed_rts_count / arts_observed_count,
       new_rts_percent = new_rts_count / arts_observed_count,
       modeled_to_observed_ratio = rts_modeled_count / arts_observed_count,
+      shared_count_ratio = shared_rts_observed_count / shared_rts_modeled_count,
+      rts_modeled_count = case_when(
+        is.na(rts_modeled_count) ~ 0,
+        TRUE ~ rts_modeled_count
+      ),
+      arts_observed_count = case_when(
+        is.na(arts_observed_count) ~ 0,
+        TRUE ~ arts_observed_count
+      ),
       .before = geometry
     )
+)
+```
+
+Take a look at distribution of counts and areas - consider a log scale for color ramps on these.
+
+```{r}
+map(
+  hex_grids,
+  function(.x) {
+    list(
+      # RTS Count (Modeled)
+      ggplot(data = .x) +
+        geom_histogram(aes(x = rts_modeled_count)) +
+        scale_x_continuous(trans = "log10"),
+
+      # ARTS Count (Observed)
+      ggplot(data = .x) +
+        geom_histogram(aes(x = arts_observed_count)) +
+        scale_x_continuous(trans = "log10")
+    )
+  }
+)
+```
+
+```{r}
+count_breaks <- map(
+  hex_grids,
+  ~ list(
+    "rts_modeled_count" = rgeoda::natural_breaks(5, .x["rts_modeled_count"]),
+    "arts_observed_count" = rgeoda::natural_breaks(5, .x["arts_observed_count"])
+  )
+)
+
+manual_breaks <- list(
+  "manual_breaks_100k" = c(0, 10, 100, 1000),
+  "manual_breaks_50k" = c(0, 5, 50, 500),
+  "manual_breaks_10k" = c(0, 1, 10, 100)
+)
+
+# total_count_breaks <- rgeoda::natural_breaks(4, rts_hex["total_count"])
+# total_count_breaks <- c(
+#   30,
+#   plyr::round_any(total_count_breaks[1:2], 50),
+#   total_count_breaks[3]
+# )
+
+# breaks = tibble(
+#   total_count_breaks = total_count_breaks,
+#   total_area_breaks = total_area_breaks,
+#   median_area_breaks = median_area_breaks,
+#   mean_prob_breaks = mean_prob_breaks,
+#   max_prob_breaks = max_prob_breaks
+# )
+
+# write_csv(
+#   breaks,
+#   "./visualization/data/mapping_class_breaks.csv"
+# )
+```
+
+```{r}
+hex_grids <- map2(
+  hex_grids,
+  manual_breaks,
+  ~ .x |>
+    rowwise() |>
+    mutate(
+      bi_class = str_flatten(
+        c(
+          classify_counts(rts_modeled_count, breaks = .y),
+          classify_counts(arts_observed_count, breaks = .y)
+        ),
+        collapse = "-"
+      ),
+      .before = geometry
+    ) |>
+    ungroup()
 )
 ```
 
@@ -273,7 +363,9 @@ hex_domains <- map(
 ```
 
 # Maps
-Iterate over all hex grid sizes and 
+
+## Single Variable Maps
+Iterate over all hex grid sizes and variables
 
 ```{r}
 hex_maps <- map2(
@@ -376,6 +468,85 @@ hex_maps <- map2(
 hex_maps
 ```
 
+## Bivariate Maps
+Compare modeled RTS counts to ARTS
+
+```{r}
+custom_palette_5 <- c(
+  "1-1" = "#FFFFFF",
+  "2-1" = "#FFDCD5",
+  "3-1" = "#FBB8AC",
+  "4-1" = "#F39585",
+  "5-1" = "#E8705F",
+  "1-2" = "#D4DFEF",
+  "2-2" = "#D6BDC5",
+  "3-2" = "#D39B9D",
+  "4-2" = "#CC7877",
+  "5-2" = "#C15552",
+  "1-3" = "#A8C0DF",
+  "2-3" = "#AD9FB6",
+  "3-3" = "#AC7E8F",
+  "4-3" = "#A65D69",
+  "5-3" = "#9C3A46",
+  "1-4" = "#7AA2CE",
+  "2-4" = "#8482A6",
+  "3-4" = "#856380",
+  "4-4" = "#81435B",
+  "5-4" = "#781F3A",
+  "1-5" = "#4385BE",
+  "2-5" = "#596797",
+  "3-5" = "#5F4971",
+  "4-5" = "#5D2A4E",
+  "5-5" = "#55002D"
+)
+```
+
+```{r}
+bi_legend_location <- c(
+  left = 0.81,
+  bottom = 0,
+  right = 1,
+  top = 0.145
+)
+
+hex_maps_bi <- pmap(
+  list(hex_grids, hex_domains, manual_breaks),
+  function(grids, domains, breaks) {
+    map_hex_grid_bi(
+      grids,
+      domains,
+      5,
+      breaks,
+      custom_palette_5,
+      legend_loc = bi_legend_location
+    )
+  }
+)
+
+hex_maps_bi
+```
 
 # Why are Not-Missed and Shared numbers so different?
 Try dividing shared count (observed) by shared count (modeled) and mapping the results to look for places with high values.
+
+```{r}
+map2(
+  hex_grids,
+  hex_domains,
+  ~ map_hex_grid(
+    .x,
+    .y,
+    "shared_count_ratio",
+    label = "Ratio of Shared RTS Count\n(Observed to Modeled)",
+    transformation = "log10"
+  )
+)
+
+ggplot(hex_grids[["hex_grid_10k"]]) +
+  geom_point(
+    aes(x = rts_modeled_area, y = shared_count_ratio)
+  ) +
+  scale_x_continuous(trans = "log10")
+```
+
+Following visual inspection of the island in Russia with the exceptionally high value, it looks like our model was an RTS "lumper" while the lab that created the entries for ARTS subscribed to an RTS "splitter" philosophy. The model only identified a few very large RTS along the coast, while the labels split features that are contiguous into sub-RTS with borders that touched (or very nearly so).

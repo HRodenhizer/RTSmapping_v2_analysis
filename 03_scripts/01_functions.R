@@ -122,6 +122,7 @@ rebuild_mp <- function(g) {
   st_multipolygon(lapply(ext, \(e) c(rings[e], rings[hol[parent == e]])))
 }
 
+##### Mapping
 # map_hex_grid
 map_hex_grid <- function(
   data,
@@ -165,4 +166,111 @@ map_hex_grid <- function(
     ) +
     # coord_sf(expand = FALSE) +
     theme_void()
+}
+
+##### Functions for Bivariate Mapping
+# classify_counts
+# This classifies a continous variable for bivariate mapping
+classify_counts <- function(count_data, breaks) {
+  new_count_data <- case_when(
+    count_data <= breaks[1] ~ 1,
+    count_data <= breaks[2] ~ 2,
+    count_data <= breaks[3] ~ 3,
+    count_data <= breaks[4] ~ 4,
+    count_data > breaks[4] ~ 5
+  )
+}
+
+# custom_bi_legend
+custom_bi_legend <- function(data, bi_dim, breaks, color_palette) {
+  bi_legend(
+    pal = color_palette,
+    dim = bi_dim,
+    xlab = "RTS Modeled (Count)",
+    ylab = "ARTS Observed (Count)",
+    # size = 5,
+    breaks = list(
+      "bi_x" = c(
+        breaks,
+        max(data |> pull(rts_modeled_count))
+      ),
+      "bi_y" = c(
+        breaks,
+        max(data |> pull(arts_observed_count))
+      )
+    )
+  ) +
+    coord_fixed(
+      xlim = c(0.5, 5.5),
+      ylim = c(0.5, 5.5),
+      clip = "off"
+    ) +
+    theme(
+      plot.margin = margin(6, 5, 6, 10),
+      plot.background = element_rect(
+        fill = fill_alpha("white", 0)
+      )
+    )
+}
+
+# map_hex_grid_bi
+map_hex_grid_bi <- function(
+  data,
+  domain,
+  bi_dim,
+  breaks,
+  color_palette,
+  legend = TRUE,
+  legend_loc
+) {
+  bi_map <- ggplot() +
+    geom_sf(data = world_north) +
+    geom_sf(
+      data = data,
+      aes(fill = bi_class),
+      color = "transparent",
+      alpha = 1
+    ) +
+    bi_scale_fill(
+      pal = color_palette,
+      dim = bi_dim,
+      guide = "none"
+    ) +
+    geom_sf(
+      data = world_north,
+      fill = "transparent"
+    ) +
+    geom_sf(
+      data = domain,
+      color = "black",
+      fill = "transparent",
+      linewidth = 0.5
+    ) +
+    geom_sf(
+      data = crop_poly,
+      color = "black",
+      fill = "transparent"
+    ) +
+    # coord_sf(expand = FALSE) +
+    theme_void()
+
+  if (legend == TRUE) {
+    bi_legend <- custom_bi_legend(
+      data,
+      bi_dim,
+      breaks,
+      color_palette
+    )
+
+    bi_map <- bi_map +
+      inset_element(
+        bi_legend,
+        left = legend_loc["left"],
+        bottom = legend_loc["bottom"],
+        right = legend_loc["right"],
+        top = legend_loc["top"]
+      )
+  }
+
+  bi_map
 }
