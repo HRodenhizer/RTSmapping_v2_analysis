@@ -337,7 +337,7 @@ hex_grids <- map2(
   ~ .x |>
     rowwise() |>
     mutate(
-      bi_class = str_flatten(
+      bi_class_arts = str_flatten(
         c(
           classify_counts(rts_modeled_count, breaks = .y),
           classify_counts(arts_observed_count, breaks = .y)
@@ -348,6 +348,17 @@ hex_grids <- map2(
     ) |>
     ungroup()
 )
+```
+
+```{r}
+# map2(
+#   hex_grids,
+#   names(hex_grids),
+#   ~ st_write(
+#     .x,
+#     paste0("./01_processed_data/", .y, ".geojson")
+#   )
+# )
 ```
 
 ## Hex Domains
@@ -361,6 +372,18 @@ hex_domains <- map(
     rename(geometry = x)
 )
 ```
+
+```{r}
+# map2(
+#   hex_domains,
+#   names(hex_domains),
+#   ~ st_write(
+#     .x,
+#     paste0("./01_processed_data/", .y, "_domain.geojson")
+#   )
+# )
+```
+
 
 # Maps
 
@@ -514,11 +537,17 @@ hex_maps_bi <- pmap(
   function(grids, domains, breaks) {
     map_hex_grid_bi(
       grids,
+      "bi_class_arts",
+      "rts_modeled_count",
+      "arts_observed_count",
       domains,
       5,
       breaks,
+      breaks,
       custom_palette_5,
-      legend_loc = bi_legend_location
+      legend_loc = bi_legend_location,
+      xlab = "RTS Count (Modeled)",
+      ylab = "RTS Count (Observed)"
     )
   }
 )

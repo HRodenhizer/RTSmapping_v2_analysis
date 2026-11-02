@@ -182,21 +182,31 @@ classify_counts <- function(count_data, breaks) {
 }
 
 # custom_bi_legend
-custom_bi_legend <- function(data, bi_dim, breaks, color_palette) {
+custom_bi_legend <- function(
+  data,
+  var1,
+  var2,
+  bi_dim,
+  xbreaks,
+  ybreaks,
+  color_palette,
+  xlab,
+  ylab
+) {
   bi_legend(
     pal = color_palette,
     dim = bi_dim,
-    xlab = "RTS Modeled (Count)",
-    ylab = "ARTS Observed (Count)",
+    xlab = xlab,
+    ylab = ylab,
     # size = 5,
     breaks = list(
       "bi_x" = c(
-        breaks,
-        max(data |> pull(rts_modeled_count))
+        xbreaks,
+        max(data |> pull(!!var1), na.rm = TRUE)
       ),
       "bi_y" = c(
-        breaks,
-        max(data |> pull(arts_observed_count))
+        ybreaks,
+        max(data |> pull(!!var2), na.rm = TRUE)
       )
     )
   ) +
@@ -216,18 +226,24 @@ custom_bi_legend <- function(data, bi_dim, breaks, color_palette) {
 # map_hex_grid_bi
 map_hex_grid_bi <- function(
   data,
+  bi_var,
+  var1,
+  var2,
   domain,
   bi_dim,
-  breaks,
+  xbreaks,
+  ybreaks,
   color_palette,
   legend = TRUE,
-  legend_loc
+  legend_loc,
+  xlab,
+  ylab
 ) {
   bi_map <- ggplot() +
     geom_sf(data = world_north) +
     geom_sf(
       data = data,
-      aes(fill = bi_class),
+      aes(fill = .data[[bi_var]]),
       color = "transparent",
       alpha = 1
     ) +
@@ -257,9 +273,14 @@ map_hex_grid_bi <- function(
   if (legend == TRUE) {
     bi_legend <- custom_bi_legend(
       data,
+      var1,
+      var2,
       bi_dim,
-      breaks,
-      color_palette
+      xbreaks,
+      ybreaks,
+      color_palette,
+      xlab,
+      ylab
     )
 
     bi_map <- bi_map +

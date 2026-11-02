@@ -1,0 +1,319 @@
+---
+title: "Comparison of Modeled RTS and RTS Probability"
+format: html
+---
+
+# TODO:
+- Investigate where rts prob was low but we found RTS (if any). Apply some sort of label for lower than expected prob. Likewise, investigate areas where we didn't find RTS, but prob was high.
+
+# Set-Up
+
+## Libraries
+
+```{r}
+library(terra)
+library(sf)
+library(tidyverse)
+library(viridis)
+library(biscale)
+library(patchwork)
+```
+
+## Project Specific Functions
+
+```{r}
+source("03_scripts/01_functions.R")
+```
+
+## Plotting Defaults
+
+```{r}
+theme_set(theme_bw())
+```
+
+
+# Import Data
+
+## RTS
+
+```{r}
+rts_pt <- st_read("./01_processed_data/high_prob_rts_pt.geojson")
+rts_poly <- st_read("./01_processed_data/high_prob_rts_poly.geojson")
+```
+
+## RTS Probability
+
+```{r}
+rts_prob <- rast(
+  '../rts_rep_analysis/sdm/gbm_kfold_10_pred_tuned_median_v.3.1.0_filter.tif'
+) |>
+  project(vect(rts_pt))
+```
+
+## Domain
+
+```{r}
+domain <- st_read("./01_processed_data/domain_south_clean.geojson")
+hex_domains <- list.files(
+  "./01_processed_data",
+  pattern = "hex_grid_\\d{2,3}k_domain.geojson",
+  full.names = TRUE
+) |>
+  str_sort(decreasing = TRUE, numeric = TRUE)
+
+hex_names <- map(
+  hex_domains,
+  ~ .x |> str_extract("hex_grid_\\d{2,3}k")
+)
+
+hex_domains <- map(
+  hex_domains,
+  ~ st_read(.x)
+)
+
+names(hex_domains) <- hex_names
+```
+
+## Hex Grids
+
+```{r}
+hex_grids <- list.files(
+  "./01_processed_data",
+  pattern = "hex_grid_\\d{2,3}k.geojson",
+  full.names = TRUE
+) |>
+  str_sort(decreasing = TRUE, numeric = TRUE)
+
+hex_names <- map(
+  hex_grids,
+  ~ .x |> str_extract("hex_grid_\\d{2,3}k")
+)
+
+hex_grids <- map(
+  hex_grids,
+  ~ st_read(.x)
+)
+
+names(hex_grids) <- hex_names
+rm(hex_names)
+```
+
+## NaturalEarth
+
+```{r}
+world <- rnaturalearth::ne_countries(scale = "medium", returnclass = "sf") |>
+  select(name, continent, region_un, subregion)
+```
+
+```{r}
+crop_poly <- tibble(
+  geometry = st_sfc(st_point(c(0, 90)), crs = 'EPSG:4326')
+) %>%
+  st_sf() %>%
+  st_transform(crs = st_crs(rts_pt)) %>%
+  st_buffer(dist = 5250000) %>%
+  smoothr::densify(n = 3) %>%
+  st_transform(crs = 'EPSG:4326')
+
+crop_bbox <- crop_poly |>
+  st_transform(6931) |>
+  st_bbox()
+
+long_lines <- seq(-180, 180, by = 60) %>%
+  map(
+    ~ long_lines_from_coords(.x, lat_min = st_bbox(crop_poly)[2], lat_max = 90)
+  ) %>%
+  bind_rows()
+
+lat_lines <- seq(50, 90, by = 10) %>%
+  map(~ lat_lines_from_coords(.x, lon_min = -180, lon_max = 180)) %>%
+  bind_rows()
+```
+
+```{r}
+russia <- world |>
+  filter(name == "Russia") |>
+  st_cast("POLYGON") |>
+  mutate(id = 1:n())
+
+# West Wrangell Island is 29, East Wrangell Island is 31
+russia$geometry[29] <- fix_geometry_at_origin(russia$geometry[29], dist = 0.11)
+russia$geometry[31] <- fix_geometry_at_origin(russia$geometry[31], dist = 0.11)
+
+russia <- russia |>
+  select(-id)
+
+russia <- russia |>
+  summarise(
+    geometry = st_union(russia),
+    .by = c(name, continent, region_un, subregion)
+  )
+
+world <- world |>
+  filter(name != "Russia") |>
+  rbind(russia)
+
+
+world_north <- world %>%
+  st_make_valid() |>
+  st_intersection(crop_poly) %>%
+  st_transform(crs = st_crs(rts_pt))
+```
+
+# Extract RTS Probability in Hex Grid
+
+```{r}
+hex_grids <- map(
+  hex_grids,
+  ~ terra::extract(
+    rts_prob,
+    .x,
+    fun = max,
+    na.rm = TRUE,
+    ID = FALSE,
+    bind = TRUE
+  ) |>
+    st_as_sf() |>
+    mutate(
+      rts_prob = case_when(
+        !is.nan(median) ~ median,
+        TRUE ~ NA
+      )
+    ) |>
+    select(-median)
+)
+```
+
+```{r}
+map(
+  hex_grids,
+  function(.x) {
+    # RTS Count (Modeled)
+    ggplot(data = .x) +
+      geom_histogram(aes(x = rts_prob))
+  }
+)
+```
+
+```{r}
+count_breaks <- map(
+  hex_grids,
+  ~ list(
+    "rts_modeled_count" = rgeoda::natural_breaks(5, .x["rts_modeled_count"]),
+    "rts_prob" = rgeoda::natural_breaks(5, .x["rts_prob"])
+  )
+)
+
+manual_breaks_rts_count <- list(
+  "manual_breaks_100k" = c(0, 10, 100, 1000),
+  "manual_breaks_50k" = c(0, 5, 50, 500),
+  "manual_breaks_10k" = c(0, 1, 10, 100)
+)
+
+manual_breaks_rts_prob <- c(0, 25, 50, 75)
+```
+
+```{r}
+hex_grids <- map2(
+  hex_grids,
+  manual_breaks_rts_count,
+  ~ .x |>
+    rowwise() |>
+    mutate(
+      bi_class_prob = str_flatten(
+        c(
+          classify_counts(rts_modeled_count, breaks = .y),
+          classify_counts(rts_prob, breaks = manual_breaks_rts_prob)
+        ),
+        collapse = "-"
+      ),
+      .before = geometry
+    ) |>
+    ungroup()
+)
+```
+
+
+# Map
+
+## Bivariate Maps
+Compare modeled RTS counts to ARTS
+
+```{r}
+custom_palette_5 <- c(
+  "1-1" = "#FFFFFF",
+  "2-1" = "#FFDCD5",
+  "3-1" = "#FBB8AC",
+  "4-1" = "#F39585",
+  "5-1" = "#E8705F",
+  "1-2" = "#D4DFEF",
+  "2-2" = "#D6BDC5",
+  "3-2" = "#D39B9D",
+  "4-2" = "#CC7877",
+  "5-2" = "#C15552",
+  "1-3" = "#A8C0DF",
+  "2-3" = "#AD9FB6",
+  "3-3" = "#AC7E8F",
+  "4-3" = "#A65D69",
+  "5-3" = "#9C3A46",
+  "1-4" = "#7AA2CE",
+  "2-4" = "#8482A6",
+  "3-4" = "#856380",
+  "4-4" = "#81435B",
+  "5-4" = "#781F3A",
+  "1-5" = "#4385BE",
+  "2-5" = "#596797",
+  "3-5" = "#5F4971",
+  "4-5" = "#5D2A4E",
+  "5-5" = "#55002D"
+)
+```
+
+Redder colors indicate more RTS were mapped than predicted, while bluer colors indicate fewer RTS were mapped than predicted.
+
+```{r}
+bi_legend_location <- c(
+  left = 0.81,
+  bottom = 0,
+  right = 1,
+  top = 0.145
+)
+
+hex_maps_bi <- pmap(
+  list(hex_grids, hex_domains, manual_breaks_rts_count),
+  function(grid, domain, breaks) {
+    filtered_grid <- grid |>
+      filter(!is.na(bi_class_prob))
+
+    map_hex_grid_bi(
+      filtered_grid,
+      "bi_class_prob",
+      "rts_modeled_count",
+      "rts_prob",
+      domain,
+      5,
+      breaks,
+      manual_breaks_rts_prob,
+      custom_palette_5,
+      legend_loc = bi_legend_location,
+      xlab = "RTS Count (Modeled)",
+      ylab = "RTS Probability"
+    )
+  }
+)
+
+hex_maps_bi
+```
+
+# Scatter Plot
+
+```{r}
+map(
+  hex_grids,
+  ~ ggplot(.x, aes(x = rts_prob, y = rts_modeled_count)) +
+    geom_point(alpha = 0.1) +
+    # scale_y_continuous(transform = "log10") +
+    geom_smooth(method = "lm", formula = (y ~ exp(x)))
+)
+```
+
