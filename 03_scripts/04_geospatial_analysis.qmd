@@ -3,6 +3,9 @@ title: "RTS Geospatial Analysis"
 format: html
 ---
 
+# TODO:
+- add other RTS characteristics to SKATER clustering algorithm?
+
 # Set-Up
 
 ## Libraries
