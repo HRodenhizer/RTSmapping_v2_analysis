@@ -220,16 +220,22 @@ hex_grids <- map2(
   ~ .x |>
     rowwise() |>
     mutate(
+      rts_modeled_count_class = classify_counts(rts_modeled_count, breaks = .y),
+      rts_prob_class = classify_counts(
+        rts_prob,
+        breaks = manual_breaks_rts_prob
+      ),
       bi_class_prob = str_flatten(
-        c(
-          classify_counts(rts_modeled_count, breaks = .y),
-          classify_counts(rts_prob, breaks = manual_breaks_rts_prob)
-        ),
+        c(rts_modeled_count_class, rts_prob_class),
         collapse = "-"
       ),
       .before = geometry
     ) |>
-    ungroup()
+    ungroup() |>
+    mutate(
+      mapped_prob_offset = rts_modeled_count_class - rts_prob_class,
+      .before = geometry
+    )
 )
 ```
 
@@ -237,7 +243,8 @@ hex_grids <- map2(
 # Map
 
 ## Bivariate Maps
-Compare modeled RTS counts to ARTS
+
+### Compare modeled RTS counts to ARTS
 
 ```{r}
 custom_palette_5 <- c(
@@ -305,6 +312,42 @@ hex_maps_bi <- pmap(
 hex_maps_bi
 ```
 
+## Univariate Maps
+
+### Offset Between Mapped RTS Count and RTS Probability
+Blue indicates we found a lot of RTS in a low probability area, while red indicates we found fewer RTS than the probability would indicate.
+
+```{r}
+count_prob_maps <- map2(
+  hex_grids,
+  hex_domains,
+  function(.x, .y) {
+    map_hex_grid(
+      .x,
+      .y,
+      variable = "mapped_prob_offset",
+      label = "Mapped RTS Count/\nRTS Probability Offset"
+    ) +
+      scale_color_gradient2(
+        name = "Mapped RTS Count/\nRTS Probability Offset",
+        na.value = "transparent",
+        limits = c(-4, 4)
+      ) +
+      scale_fill_gradient2(
+        name = "Mapped RTS Count/\nRTS Probability Offset",
+        na.value = "transparent",
+        limits = c(-4, 4)
+      ) +
+      theme(
+        legend.position = "bottom",
+        legend.direction = "horizontal"
+      )
+  }
+)
+
+count_prob_maps
+```
+
 # Scatter Plot
 
 ```{r}
@@ -317,3 +360,139 @@ map(
 )
 ```
 
+```{r}
+map(
+  hex_grids,
+  ~ ggplot(.x, aes(x = rts_prob_class, y = rts_modeled_count_class)) +
+    geom_bin2d(binwidth = 1, center = 0) +
+    # scale_y_continuous(transform = "log10") +
+    # geom_smooth(method = "lm", formula = (y ~ exp(x))) +
+    scale_fill_viridis() +
+    coord_fixed(expand = FALSE)
+)
+```
+
+### Pixel Counts of RTS Count/RTS Probability Offsets
+
+With a heatmap:
+```{r}
+map(
+  hex_grids,
+  ~ ggplot(.x, aes(x = rts_prob_class, y = rts_modeled_count_class)) +
+    geom_count(aes(size = after_stat(n), color = after_stat(n))) +
+    scale_size_continuous(
+      name = "Pixel Count",
+      range = c(3, 16)
+    ) +
+    scale_color_viridis(name = "Pixel Count") +
+    scale_x_continuous(limits = c(1, 5)) +
+    scale_y_continuous(limits = c(1, 5)) +
+    guides(color = "legend") +
+    coord_fixed()
+)
+```
+
+With size scaled points:
+```{r}
+offset_bands <- tibble(
+  x = c(
+    c(3.75, 5.25),
+    c(2.75, 3.75, 5.25),
+    c(1.75, 2.75, 5.25),
+    c(0.25, 2.75, 3.75),
+    c(0.25, 1.75, 2.75),
+    c(0.25, 1.75)
+  ),
+  ymin = c(
+    c(0.25, 0.25),
+    c(0.25, 0.25, 1.75),
+    c(0.25, 0.25, 2.75),
+    c(1.75, 4.25, 5.25),
+    c(2.75, 4.25, 5.25),
+    c(3.75, 5.25)
+  ),
+  ymax = c(
+    c(0.25, 1.75),
+    c(0.25, 1.25, 2.75),
+    c(0.25, 1.25, 3.75),
+    c(2.75, 5.25, 5.25),
+    c(3.75, 5.25, 5.25),
+    c(5.25, 5.25)
+  ),
+  band = c(rep(-4, 2), rep(-3, 3), rep(-2, 3), rep(2, 3), rep(3, 3), rep(4, 2))
+)
+
+pixel_count_plots <- map(
+  hex_grids,
+  ~ ggplot(.x, aes(x = rts_prob_class, y = rts_modeled_count_class)) +
+    geom_ribbon(
+      data = offset_bands,
+      aes(x = x, ymin = ymin, ymax = ymax, fill = band, group = band),
+      alpha = 0.5,
+      inherit.aes = FALSE
+    ) +
+    scale_fill_gradient2() +
+    geom_count(aes(size = after_stat(n), color = after_stat(n))) +
+    scale_size_continuous(
+      name = "Pixel Count",
+      range = c(3, 16)
+    ) +
+    scale_color_viridis(name = "Pixel Count") +
+    geom_abline(
+      slope = 1,
+      intercept = c(-3.5, -2.5, -1.5, 1.5, 2.5, 3.5),
+      color = c("black", "gray30", "gray60", "gray60", "gray30", "black")
+    ) +
+    geom_text(
+      data = tibble(
+        x = c(0.5, 0.5, 0.5, 2.5, 3.5, 4.5),
+        y = c(4.5, 3.5, 2.5, 0.5, 0.5, 0.5),
+        label = c("+4", "+3", "+2", "-2", "-3", "-4")
+      ),
+      aes(
+        x = x,
+        y = y,
+        label = label
+      ),
+      inherit.aes = FALSE
+    ) +
+    geom_text(
+      data = tibble(x = 0.5, y = 0.5, label = "RTS Count/\nProbability Offset"),
+      aes(
+        x = x,
+        y = y,
+        label = label
+      ),
+      hjust = 0,
+      inherit.aes = FALSE
+    ) +
+    scale_x_continuous(
+      name = "RTS Probability Class",
+      limits = c(0.25, 5.25),
+      breaks = seq(1, 5),
+      labels = c("Low", "", "", "", "High")
+    ) +
+    scale_y_continuous(
+      name = "RTS Count Class (Modeled)",
+      limits = c(0.25, 5.25),
+      breaks = seq(1, 5),
+      labels = c("Low", "", "", "", "High")
+    ) +
+    guides(color = "legend") +
+    coord_fixed(expand = FALSE)
+)
+
+pixel_count_plots
+```
+
+# Combined Figures
+
+## RTS Count/RTS Probability Offset
+
+```{r}
+map2(
+  count_prob_maps,
+  pixel_count_plots,
+  ~ .x + (.y / plot_spacer())
+)
+```

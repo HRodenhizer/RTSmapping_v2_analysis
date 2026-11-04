@@ -202,11 +202,11 @@ custom_bi_legend <- function(
     breaks = list(
       "bi_x" = c(
         xbreaks,
-        max(data |> pull(!!var1), na.rm = TRUE)
+        round(max(data |> pull(!!var1), na.rm = TRUE))
       ),
       "bi_y" = c(
         ybreaks,
-        max(data |> pull(!!var2), na.rm = TRUE)
+        round(max(data |> pull(!!var2), na.rm = TRUE))
       )
     )
   ) +
