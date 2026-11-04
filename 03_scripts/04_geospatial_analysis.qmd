@@ -445,7 +445,7 @@ ggplot() +
 
 ```{r}
 # st_write(
-#   rts_regions,
+#   rts_regions_smooth,
 #   "./01_processed_data/rts_regions.geojson"
 # )
 ```
