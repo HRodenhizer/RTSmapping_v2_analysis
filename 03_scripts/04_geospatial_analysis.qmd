@@ -68,12 +68,6 @@ env_pred <- env_pred |>
 ```{r}
 world <- rnaturalearth::ne_countries(scale = "medium", returnclass = "sf") |>
   select(name, continent, region_un, subregion)
-land <- rnaturalearth::ne_download(
-  scale = "medium",
-  type = "land",
-  category = "physical"
-) |>
-  st_transform(st_crs(rts_pt))
 ```
 
 ```{r}
@@ -407,7 +401,7 @@ rts_regions_smooth <- rts_regions_smooth |>
   mutate(
     name = 1:n()
   ) |>
-  st_intersection(land) |>
+  st_intersection(domain) |>
   summarise(
     geometry = st_union(geometry),
     .by = c("name", name, X, Y)
@@ -426,9 +420,18 @@ ggplot() +
   scale_color_viridis() +
   scale_fill_viridis() +
   geom_sf(
-    data = world_north,
+    data = rts_regions,
+    color = "purple",
     fill = "transparent"
   ) +
+  geom_sf(
+    data = domain,
+    fill = "transparent"
+  ) +
+  # geom_sf(
+  #   data = world_north,
+  #   fill = "transparent"
+  # ) +
   geom_sf(
     data = crop_poly,
     color = "black",
