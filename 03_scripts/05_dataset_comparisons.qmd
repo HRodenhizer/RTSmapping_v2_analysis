@@ -1,0 +1,1192 @@
+---
+title: "Comparison of Mapped and Observed RTS"
+format: html
+---
+
+# TODO:
+- Next time start at classify values!
+- Combine 05 and 06 scripts into one to reduce repeated code. Or split out data prep sections into data prep?
+- Investigate why not missed and shared counts are so different.
+- Investigate where counts were very different than expected. Apply some sort of label for lower/higher than expected counts. Aggregate by region.
+
+# Set-Up
+
+## Libraries
+
+```{r}
+library(terra)
+library(sf)
+library(tidyverse)
+library(viridis)
+library(biscale)
+library(patchwork)
+```
+
+## Project Specific Functions
+
+```{r}
+source("03_scripts/01_functions.R")
+```
+
+## Plotting Defaults
+
+```{r}
+theme_set(theme_bw())
+```
+
+
+# Import Data
+
+## RTS
+
+```{r}
+rts_pt <- st_read("./01_processed_data/high_prob_rts_pt.geojson")
+rts_poly <- st_read("./01_processed_data/high_prob_rts_poly.geojson")
+```
+
+## ARTS
+
+```{r}
+arts <- st_read(
+  "../ARTS/ARTS_main_dataset/v.6.0.0/ARTS_main_dataset_v.6.0.0.geojson"
+) |>
+  st_transform(st_crs(rts_poly)) |>
+  filter(TrainClass == "Positive")
+```
+
+## RTS Probability
+
+```{r}
+rts_prob <- rast(
+  '../rts_rep_analysis/sdm/gbm_kfold_10_pred_tuned_median_v.3.1.0_filter.tif'
+) |>
+  project(vect(rts_pt))
+```
+
+## RTS Regions
+
+```{r}
+regions <- st_read("./01_processed_data/rts_regions.geojson")
+```
+
+## Domain
+
+```{r}
+domain <- st_read("./01_processed_data/domain_south_clean.geojson")
+```
+
+## NaturalEarth
+
+```{r}
+world <- rnaturalearth::ne_countries(scale = "medium", returnclass = "sf") |>
+  select(name, continent, region_un, subregion)
+```
+
+```{r}
+crop_poly <- tibble(
+  geometry = st_sfc(st_point(c(0, 90)), crs = 'EPSG:4326')
+) %>%
+  st_sf() %>%
+  st_transform(crs = st_crs(rts_pt)) %>%
+  st_buffer(dist = 5250000) %>%
+  smoothr::densify(n = 3) %>%
+  st_transform(crs = 'EPSG:4326')
+
+crop_bbox <- crop_poly |>
+  st_transform(6931) |>
+  st_bbox()
+
+long_lines <- seq(-180, 180, by = 60) %>%
+  map(
+    ~ long_lines_from_coords(.x, lat_min = st_bbox(crop_poly)[2], lat_max = 90)
+  ) %>%
+  bind_rows()
+
+lat_lines <- seq(50, 90, by = 10) %>%
+  map(~ lat_lines_from_coords(.x, lon_min = -180, lon_max = 180)) %>%
+  bind_rows()
+```
+
+```{r}
+russia <- world |>
+  filter(name == "Russia") |>
+  st_cast("POLYGON") |>
+  mutate(id = 1:n())
+
+# West Wrangell Island is 29, East Wrangell Island is 31
+russia$geometry[29] <- fix_geometry_at_origin(russia$geometry[29], dist = 0.11)
+russia$geometry[31] <- fix_geometry_at_origin(russia$geometry[31], dist = 0.11)
+
+russia <- russia |>
+  select(-id)
+
+russia <- russia |>
+  summarise(
+    geometry = st_union(russia),
+    .by = c(name, continent, region_un, subregion)
+  )
+
+world <- world |>
+  filter(name != "Russia") |>
+  rbind(russia)
+
+
+world_north <- world %>%
+  st_make_valid() |>
+  st_intersection(crop_poly) %>%
+  st_transform(crs = st_crs(rts_pt))
+```
+
+# RTS Subsets (Compared to ARTS)
+
+## New RTS
+```{r}
+new_rts <- rts_poly |>
+  filter(lengths(st_intersects(rts_poly, arts)) == 0)
+```
+
+## Shared RTS
+
+```{r}
+shared_rts_map <- rts_poly |>
+  filter(lengths(st_intersects(rts_poly, arts)) >= 1)
+
+shared_rts_obs <- arts |>
+  filter(lengths(st_intersects(arts, rts_poly)) >= 1)
+```
+
+## Missed RTS
+
+```{r}
+missed_rts <- arts |>
+  filter(lengths(st_intersects(arts, rts_poly)) == 0)
+```
+
+## RTS Subset STatistics
+Make a table/infographic with these?
+```{r}
+(rts_count <- nrow(rts_poly))
+(arts_count <- nrow(arts))
+(new_rts_count <- nrow(new_rts))
+(shared_rts_map_count <- nrow(shared_rts_map))
+(shared_rts_obs_count <- nrow(shared_rts_obs))
+(missed_rts_count <- nrow(missed_rts))
+
+(percent_arts_found <- (arts_count - missed_rts_count) / arts_count)
+(percent_arts_missed <- missed_rts_count / arts_count)
+
+(percent_new <- new_rts_count / rts_count)
+
+(not_missed_to_shared_ratio <- shared_rts_obs_count /
+  shared_rts_map_count)
+```
+
+# Hex Grid Data Prep
+
+## Create Hex Grid
+
+```{r}
+hex_grids <- map(
+  c(100000, 50000, 10000),
+  ~ domain |>
+    st_make_grid(
+      cellsize = sqrt((.x * 2) / (sqrt(3))) * 1000, # get short side length of hexagon from area == 100,000 km^2, and convert to m
+      square = FALSE
+    ) |>
+    st_as_sf() |>
+    rename(geometry = x) |>
+    st_filter(domain) |>
+    mutate(idx = 1:n())
+)
+
+names(hex_grids) <- c("hex_grid_100k", "hex_grid_50k", "hex_grid_10k")
+```
+
+## Extract Values
+
+### RTS Counts
+
+Get counts of mapped RTS, observed RTS (ARTS), shared RTS (base: mapped), shared RTS (base: observed/ARTS), new RTS, and missed RTS.
+
+```{r}
+hex_grids <- map(
+  hex_grids,
+  ~ .x |>
+    # mapped RTS count
+    left_join(
+      rts_poly |>
+        st_join(.x) |>
+        st_drop_geometry() |>
+        mutate(pp = (4 * pi * area_m2) / perimeter_m^2) |>
+        summarise(
+          rts_map_count = n(),
+          rts_map_area = median(area_m2),
+          rts_map_pp = median(pp),
+          .by = idx
+        ),
+      by = "idx"
+    ) |>
+    # observed ARTS count
+    left_join(
+      arts |>
+        st_join(.x) |>
+        st_drop_geometry() |>
+        summarise(
+          arts_obs_count = n(),
+          .by = idx
+        ),
+      by = "idx"
+    ) |>
+    # shared RTS count (base:mapped)
+    left_join(
+      shared_rts_map |>
+        st_join(.x) |>
+        st_drop_geometry() |>
+        summarise(
+          shared_rts_map_count = n(),
+          .by = idx
+        ),
+      by = "idx"
+    ) |>
+    # shared RTS count (base:observed/ARTS)
+    left_join(
+      shared_rts_obs |>
+        st_join(.x) |>
+        st_drop_geometry() |>
+        summarise(
+          shared_rts_obs_count = n(),
+          .by = idx
+        ),
+      by = "idx"
+    ) |>
+    # new RTS count
+    left_join(
+      new_rts |>
+        st_join(.x) |>
+        st_drop_geometry() |>
+        summarise(
+          new_rts_count = n(),
+          .by = idx
+        ),
+      by = "idx"
+    ) |>
+    # missed RTS count
+    left_join(
+      missed_rts |>
+        st_join(.x) |>
+        st_drop_geometry() |>
+        summarise(
+          missed_rts_count = n(),
+          .by = idx
+        ),
+      by = "idx"
+    ) |>
+    mutate(
+      missed_rts_percent = missed_rts_count / arts_obs_count,
+      new_rts_percent = new_rts_count / arts_obs_count,
+      map_obs_ratio = rts_map_count / arts_obs_count,
+      shared_count_ratio = shared_rts_obs_count / shared_rts_map_count,
+      rts_map_count = case_when(
+        is.na(rts_map_count) ~ 0,
+        TRUE ~ rts_map_count
+      ),
+      arts_obs_count = case_when(
+        is.na(arts_obs_count) ~ 0,
+        TRUE ~ arts_obs_count
+      ),
+      .before = geometry
+    )
+)
+```
+
+### RTS Probability
+
+```{r}
+hex_grids <- map(
+  hex_grids,
+  ~ terra::extract(
+    rts_prob,
+    .x,
+    fun = max,
+    na.rm = TRUE,
+    ID = FALSE,
+    bind = TRUE
+  ) |>
+    st_as_sf() |>
+    mutate(
+      rts_prob = case_when(
+        !is.nan(median) ~ median,
+        TRUE ~ NA
+      )
+    ) |>
+    select(-median)
+)
+```
+
+## Classify Values
+
+Take a look at distribution of counts and areas - consider a log scale for color ramps on these.
+
+```{r}
+map(
+  hex_grids,
+  function(.x) {
+    list(
+      # RTS Count (Mapped)
+      ggplot(data = .x) +
+        geom_histogram(aes(x = rts_map_count)) +
+        scale_x_continuous(trans = "log10"),
+
+      # ARTS Count (Observed)
+      ggplot(data = .x) +
+        geom_histogram(aes(x = arts_obs_count)) +
+        scale_x_continuous(trans = "log10"),
+
+      # RTS Count (Mapped)
+      ggplot(data = .x) +
+        geom_histogram(aes(x = rts_prob))
+    )
+  }
+)
+```
+
+```{r}
+count_breaks <- map(
+  hex_grids,
+  ~ list(
+    "rts_map_count" = c(
+      0,
+      quantile(
+        .x |>
+          filter(rts_map_count != 0) |>
+          pull(rts_map_count),
+        probs = c(0.5, 0.8, 0.95, 1)
+      )
+    ),
+    "arts_obs_count" = c(
+      0,
+      quantile(
+        .x |>
+          filter(arts_obs_count != 0) |>
+          pull(arts_obs_count),
+        probs = c(0.5, 0.8, 0.95, 1)
+      )
+    ),
+    "rts_prob" = c(
+      0,
+      quantile(
+        .x |>
+          filter(rts_prob != 0) |>
+          pull(rts_prob),
+        probs = c(0.5, 0.8, 0.95, 1)
+      ) |>
+        round(2)
+    )
+  )
+)
+```
+
+```{r}
+hex_grids <- map2(
+  hex_grids,
+  count_breaks,
+  ~ .x |>
+    mutate(
+      rts_map_count_class = classify_counts(
+        rts_map_count,
+        breaks = .y$rts_map_count
+      ),
+      arts_obs_count_class = classify_counts(
+        arts_obs_count,
+        breaks = .y$arts_obs_count
+      ),
+      rts_prob_class = classify_counts(
+        rts_prob,
+        breaks = .y$rts_prob
+      ),
+      map_obs_offset = rts_map_count_class - arts_obs_count_class,
+      map_prob_offset = rts_map_count_class - rts_prob_class,
+      .before = geometry
+    ) |>
+    rowwise() |>
+    mutate(
+      bi_class_arts = str_flatten(
+        c(rts_map_count_class, arts_obs_count_class),
+        collapse = "-"
+      ),
+      bi_class_prob = str_flatten(
+        c(rts_map_count_class, rts_prob_class),
+        collapse = "-"
+      ),
+      .before = geometry
+    ) |>
+    ungroup()
+)
+```
+
+```{r}
+# map2(
+#   hex_grids,
+#   names(hex_grids),
+#   ~ st_write(
+#     .x,
+#     paste0("./01_processed_data/", .y, ".geojson"),
+#     delete_dsn = TRUE
+#   )
+# )
+```
+
+## Hex Domains
+
+```{r}
+hex_domains <- map(
+  hex_grids,
+  ~ .x |>
+    st_union() |>
+    st_as_sf() |>
+    rename(geometry = x)
+)
+```
+
+```{r}
+# map2(
+#   hex_domains,
+#   names(hex_domains),
+#   ~ st_write(
+#     .x,
+#     paste0("./01_processed_data/", .y, "_domain.geojson"),
+#     delete_dsn = TRUE
+#   )
+# )
+```
+
+# Regional Stats
+
+```{r}
+region_stats <- map2(
+  hex_grids,
+  count_breaks,
+  ~ regions |>
+    st_join(.x) |>
+    summarise(
+      across(
+        !contains("class") & !contains("idx"),
+        list(mean = mean, sd = sd),
+        na.rm = TRUE
+      ),
+      .by = c(name, X, Y, geometry)
+    ) |>
+    mutate(
+      rts_map_count_class = classify_counts(
+        rts_map_count_mean,
+        breaks = .y$rts_map_count
+      ),
+      rts_map_count_class_sd = rts_map_count_sd /
+        (.y$rts_map_count[rts_map_count_class + 1] -
+          .y$rts_map_count[rts_map_count_class]),
+      arts_obs_count_class = classify_counts(
+        arts_obs_count_mean,
+        breaks = .y$arts_obs_count
+      ),
+      arts_obs_count_class_sd = arts_obs_count_sd /
+        (.y$arts_obs_count[arts_obs_count_class + 1] -
+          .y$arts_obs_count[arts_obs_count_class]),
+      rts_prob_class = classify_counts(
+        rts_prob_mean,
+        breaks = .y$rts_prob
+      ),
+      rts_prob_class_sd = rts_prob_sd /
+        (.y$rts_prob[rts_prob_class + 1] -
+          .y$rts_prob[rts_prob_class]),
+      map_obs_offset = rts_map_count_class - arts_obs_count_class,
+      map_obs_offset_sd = sqrt(
+        rts_map_count_class_sd^2 + arts_obs_count_class_sd^2
+      ),
+      map_prob_offset = rts_map_count_class - rts_prob_class,
+      map_prob_offset_sd = sqrt(
+        rts_map_count_class_sd^2 + rts_prob_class_sd^2
+      ),
+      .before = geometry
+    ) |>
+    rowwise() |>
+    mutate(
+      bi_class_arts = str_flatten(
+        c(rts_map_count_class, arts_obs_count_class),
+        collapse = "-"
+      ),
+      bi_class_prob = str_flatten(
+        c(rts_map_count_class, rts_prob_class),
+        collapse = "-"
+      ),
+      .before = geometry
+    ) |>
+    ungroup()
+)
+```
+
+
+# Visual Investigations
+
+## Mapping Prep
+
+### Bivariate Mapping
+```{r}
+custom_palette_5 <- c(
+  "1-1" = "#FFFFFF",
+  "2-1" = "#FFDCD5",
+  "3-1" = "#FBB8AC",
+  "4-1" = "#F39585",
+  "5-1" = "#E8705F",
+  "1-2" = "#D4DFEF",
+  "2-2" = "#D6BDC5",
+  "3-2" = "#D39B9D",
+  "4-2" = "#CC7877",
+  "5-2" = "#C15552",
+  "1-3" = "#A8C0DF",
+  "2-3" = "#AD9FB6",
+  "3-3" = "#AC7E8F",
+  "4-3" = "#A65D69",
+  "5-3" = "#9C3A46",
+  "1-4" = "#7AA2CE",
+  "2-4" = "#8482A6",
+  "3-4" = "#856380",
+  "4-4" = "#81435B",
+  "5-4" = "#781F3A",
+  "1-5" = "#4385BE",
+  "2-5" = "#596797",
+  "3-5" = "#5F4971",
+  "4-5" = "#5D2A4E",
+  "5-5" = "#55002D"
+)
+```
+
+```{r}
+bi_legend_location <- c(
+  left = 0.81,
+  bottom = 0,
+  right = 1,
+  top = 0.145
+)
+```
+
+### Pixel Count Plots
+
+```{r}
+offset_bands <- tibble(
+  x = c(
+    c(3.75, 5.25),
+    c(2.75, 3.75, 5.25),
+    c(1.75, 2.75, 5.25),
+    c(0.25, 2.75, 3.75),
+    c(0.25, 1.75, 2.75),
+    c(0.25, 1.75)
+  ),
+  ymin = c(
+    c(0.25, 0.25),
+    c(0.25, 0.25, 1.75),
+    c(0.25, 0.25, 2.75),
+    c(1.75, 4.25, 5.25),
+    c(2.75, 4.25, 5.25),
+    c(3.75, 5.25)
+  ),
+  ymax = c(
+    c(0.25, 1.75),
+    c(0.25, 1.25, 2.75),
+    c(0.25, 1.25, 3.75),
+    c(2.75, 5.25, 5.25),
+    c(3.75, 5.25, 5.25),
+    c(5.25, 5.25)
+  ),
+  band = c(rep(-4, 2), rep(-3, 3), rep(-2, 3), rep(2, 3), rep(3, 3), rep(4, 2))
+)
+```
+
+## Mapping Data Subsets
+Take a look at various subsets of the total dataset. Counts: total mapped RTS count, total ARTS observed count, shared RTS count (base: mapped), shared RTS count (base: observed), new RTS count, missed RTS count. Percents (relative to ARTS observed count): new RTS percent, missed RTS percent, mapped to observed ratio.
+
+```{r}
+hex_maps <- map2(
+  hex_grids,
+  hex_domains,
+  function(.x, .y) {
+    list(
+      ### Data Subsets
+      # RTS Count (Mapped)
+      map_hex_grid(
+        .x,
+        .y,
+        variable = "rts_map_count",
+        label = "RTS Count\n(Mapped)",
+        transformation = "log10"
+      ),
+
+      # ARTS Count (Observed)
+      map_hex_grid(
+        .x,
+        .y,
+        variable = "arts_obs_count",
+        label = "ARTS Count\n(Observed)",
+        transformation = "log10"
+      ),
+
+      # Shared RTS Count (base: mapped)
+      map_hex_grid(
+        .x,
+        .y,
+        variable = "shared_rts_map_count",
+        label = "Shared RTS\nCount\n(Mapped)",
+        transformation = "log10"
+      ),
+
+      # Shared RTS Count (base: observed)
+      map_hex_grid(
+        .x,
+        .y,
+        variable = "shared_rts_obs_count",
+        label = "Shared RTS\nCount\n(Observed)",
+        transformation = "log10"
+      ),
+
+      # New RTS Count
+      map_hex_grid(
+        .x,
+        .y,
+        variable = "new_rts_count",
+        label = "New RTS\nCount",
+        transformation = "log10"
+      ),
+
+      # Missed RTS Count
+      map_hex_grid(
+        .x,
+        .y,
+        variable = "missed_rts_count",
+        label = "Missed RTS\nCount",
+        transformation = "log10"
+      ),
+
+      ### Dataset Comparison (Ratios and Percents)
+      # New RTS Percent
+      # Blue means we found more new RTS than we already knew about, red means we found fewer new RTS than we already knew about
+      map_hex_grid(
+        .x,
+        .y,
+        variable = "new_rts_percent",
+        color_scale = scale_color_gradient2,
+        fill_scale = scale_fill_gradient2,
+        label = "New RTS\n(Percent)",
+        transformation = "log10"
+      ),
+
+      # Missed RTS percent
+      map_hex_grid(
+        .x,
+        .y,
+        variable = "missed_rts_percent",
+        label = "Missed RTS\n(Percent)",
+        transformation = "identity"
+      ),
+
+      # Mapped to Observed Ratio
+      # Blue means we found more RTS (total, not just new) than we already knew about, red means we found fewer RTS (total, not just new) than we already knew about
+      map_hex_grid(
+        .x,
+        .y,
+        variable = "map_obs_ratio",
+        color_scale = scale_color_gradient2,
+        fill_scale = scale_fill_gradient2,
+        label = "Mapped to\nObserved Ratio",
+        transformation = "log10"
+      )
+    )
+  }
+)
+
+hex_maps
+```
+
+## Mapped RTS Counts vs ARTS Observations
+
+### Bivariate Maps
+
+```{r}
+hex_maps_bi_arts <- pmap(
+  list(hex_grids, hex_domains, count_breaks),
+  function(grids, domains, breaks) {
+    map_hex_grid_bi(
+      grids,
+      "bi_class_arts",
+      "rts_map_count",
+      "arts_obs_count",
+      domains,
+      5,
+      breaks$rts_map_count,
+      breaks$arts_obs_count,
+      custom_palette_5,
+      legend_loc = bi_legend_location,
+      xlab = "RTS Count (Mapped)",
+      ylab = "RTS Count (Observed)"
+    )
+  }
+)
+
+hex_maps_bi_arts
+```
+
+### Scatter Plots
+
+```{r}
+map(
+  hex_grids,
+  ~ ggplot(.x, aes(x = arts_obs_count, y = rts_map_count)) +
+    geom_point(alpha = 0.1) +
+    scale_x_continuous(transform = "log10") +
+    scale_y_continuous(transform = "log10") +
+    geom_smooth(method = "lm")
+)
+```
+
+### Offset Between Mapped RTS Count and ARTS Observations Count
+
+#### Univariate Maps
+Blue indicates we found a lot of RTS in a low probability area, while red indicates we found fewer RTS than the probability would indicate.
+
+```{r}
+count_arts_maps <- map2(
+  hex_grids,
+  hex_domains,
+  function(.x, .y) {
+    map_hex_grid(
+      .x,
+      .y,
+      variable = "map_obs_offset",
+      label = "Mapped RTS Count/\nARTS Observation Offset"
+    ) +
+      geom_sf(
+        data = regions,
+        color = "black",
+        fill = "transparent",
+        linetype = "dashed"
+      ) +
+      geom_sf_text(
+        data = regions,
+        aes(label = name)
+      ) +
+      scale_color_gradient2(
+        name = "Mapped RTS Count/\nARTS Observation Offset",
+        na.value = "transparent",
+        limits = c(-4, 4)
+      ) +
+      scale_fill_gradient2(
+        name = "Mapped RTS Count/\nARTS Observation Offset",
+        na.value = "transparent",
+        limits = c(-4, 4)
+      ) +
+      theme(
+        legend.position = "bottom",
+        legend.direction = "horizontal"
+      ) +
+      coord_sf(expand = FALSE)
+  }
+)
+
+count_arts_maps
+```
+
+#### Pixel Counts of Offsets
+
+With size scaled points:
+```{r}
+pixel_count_plots_arts <- map(
+  hex_grids,
+  ~ ggplot(.x, aes(x = arts_obs_count_class, y = rts_map_count_class)) +
+    geom_ribbon(
+      data = offset_bands,
+      aes(
+        x = x,
+        ymin = ymin,
+        ymax = ymax,
+        fill = band,
+        group = band
+      ),
+      alpha = 0.5,
+      inherit.aes = FALSE
+    ) +
+    scale_fill_gradient2(guide = "none") +
+    geom_count(
+      aes(
+        size = after_stat(n),
+        # color = after_stat(n)
+      )
+    ) +
+    scale_size_continuous(
+      name = "Pixel Count",
+      range = c(2, 10)
+    ) +
+    # scale_color_viridis(name = "Pixel Count") +
+    geom_abline(
+      slope = 1,
+      intercept = c(-3.5, -2.5, -1.5, 1.5, 2.5, 3.5),
+      color = c("black", "gray30", "gray60", "gray60", "gray30", "black")
+    ) +
+    geom_text(
+      data = tibble(
+        x = c(0.5, 0.5, 0.5, 2.5, 3.5, 4.5),
+        y = c(4.5, 3.5, 2.5, 0.5, 0.5, 0.5),
+        label = c("+4", "+3", "+2", "-2", "-3", "-4")
+      ),
+      aes(
+        x = x,
+        y = y,
+        label = label
+      ),
+      inherit.aes = FALSE
+    ) +
+    geom_text(
+      data = tibble(
+        x = 0.5,
+        y = 0.5,
+        label = "Mapped RTS/\nARTS Observations Offset"
+      ),
+      aes(
+        x = x,
+        y = y,
+        label = label
+      ),
+      hjust = 0,
+      inherit.aes = FALSE
+    ) +
+    scale_x_continuous(
+      name = "ARTS Count Class (Observed)",
+      limits = c(0.25, 5.25),
+      breaks = seq(1, 5),
+      labels = c("Low", "", "", "", "High")
+    ) +
+    scale_y_continuous(
+      name = "RTS Count Class (Mapped)",
+      limits = c(0.25, 5.25),
+      breaks = seq(1, 5),
+      labels = c("Low", "", "", "", "High")
+    ) +
+    guides(color = "legend") +
+    coord_fixed(expand = FALSE)
+)
+
+pixel_count_plots_arts
+```
+
+#### Regional Characteristics of Offsets
+
+```{r}
+region_offset_plots_arts <- map(
+  region_stats,
+  ~ ggplot(
+    .x,
+    aes(
+      x = name,
+      y = map_obs_offset
+    )
+  ) +
+    geom_hline(yintercept = 0, color = "gray50", linewidth = 0.3) +
+    geom_errorbar(
+      aes(
+        x = name,
+        ymin = map_obs_offset - map_obs_offset_sd,
+        ymax = map_obs_offset + map_obs_offset_sd
+      ),
+      width = 0,
+      lineend = "round"
+    ) +
+    geom_point(
+      aes(
+        fill = map_obs_offset
+      ),
+      shape = 21,
+      size = 5
+    ) +
+    scale_fill_gradient2(
+      limits = c(-4, 4),
+      guide = "none"
+    ) +
+    scale_x_continuous(name = "Region") +
+    scale_y_continuous(name = "Mapped RTS/\nARTS Observations Offset")
+)
+region_offset_plots_arts
+```
+
+#### Combined Figures
+
+```{r}
+combined_arts_offset_plots <- pmap(
+  list(
+    count_arts_maps,
+    pixel_count_plots_arts,
+    region_offset_plots_arts
+  ),
+  function(maps, count_plots, region_plots) {
+    maps +
+      (count_plots / region_plots) +
+      plot_layout(widths = c(1.5, 1))
+  }
+)
+combined_arts_offset_plots
+```
+
+## Mapped RTS Counts vs RTS Probability
+
+### Bivariate Maps
+Redder colors indicate more RTS were mapped than predicted, while bluer colors indicate fewer RTS were mapped than predicted.
+
+```{r}
+bi_legend_location <- c(
+  left = 0.81,
+  bottom = 0,
+  right = 1,
+  top = 0.145
+)
+
+hex_maps_bi_prob <- pmap(
+  list(hex_grids, hex_domains, count_breaks),
+  function(grid, domain, breaks) {
+    filtered_grid <- grid |>
+      filter(!is.na(bi_class_prob))
+
+    map_hex_grid_bi(
+      filtered_grid,
+      "bi_class_prob",
+      "rts_map_count",
+      "rts_prob",
+      domain,
+      5,
+      breaks$rts_map_count,
+      round(breaks$rts_prob, 2),
+      custom_palette_5,
+      legend_loc = bi_legend_location,
+      xlab = "RTS Count (Mapped)",
+      ylab = "RTS Probability"
+    )
+  }
+)
+
+hex_maps_bi_prob
+```
+
+### Scatter Plots
+
+```{r}
+map(
+  hex_grids,
+  ~ ggplot(.x, aes(x = rts_prob, y = rts_map_count)) +
+    geom_point(alpha = 0.1) +
+    # scale_y_continuous(transform = "log10") +
+    geom_smooth(method = "lm", formula = (y ~ exp(x)))
+)
+```
+
+### Offset Between Mapped RTS Count and RTS Probability
+
+#### Univariate Maps
+Blue indicates we found a lot of RTS in a low probability area, while red indicates we found fewer RTS than the probability would indicate.
+
+```{r}
+count_prob_maps <- map2(
+  hex_grids,
+  hex_domains,
+  function(.x, .y) {
+    map_hex_grid(
+      .x,
+      .y,
+      variable = "map_prob_offset",
+      label = "Mapped RTS Count/\nRTS Probability Offset"
+    ) +
+      geom_sf(
+        data = regions,
+        color = "black",
+        fill = "transparent",
+        linetype = "dashed"
+      ) +
+      geom_sf_text(
+        data = regions,
+        aes(label = name)
+      ) +
+      scale_color_gradient2(
+        name = "Mapped RTS Count/\nRTS Probability Offset",
+        na.value = "transparent",
+        limits = c(-4, 4)
+      ) +
+      scale_fill_gradient2(
+        name = "Mapped RTS Count/\nRTS Probability Offset",
+        na.value = "transparent",
+        limits = c(-4, 4)
+      ) +
+      theme(
+        legend.position = "bottom",
+        legend.direction = "horizontal"
+      ) +
+      coord_sf(expand = FALSE)
+  }
+)
+
+count_prob_maps
+```
+
+#### Pixel Counts of RTS Count/RTS Probability Offsets
+
+With size scaled points:
+```{r}
+pixel_count_plots_prob <- map(
+  hex_grids,
+  ~ ggplot(.x, aes(x = rts_prob_class, y = rts_map_count_class)) +
+    geom_ribbon(
+      data = offset_bands,
+      aes(
+        x = x,
+        ymin = ymin,
+        ymax = ymax,
+        fill = band,
+        group = band
+      ),
+      alpha = 0.5,
+      inherit.aes = FALSE
+    ) +
+    scale_fill_gradient2(guide = "none") +
+    geom_count(
+      aes(
+        size = after_stat(n),
+        # color = after_stat(n)
+      )
+    ) +
+    scale_size_continuous(
+      name = "Pixel Count",
+      range = c(2, 10)
+    ) +
+    # scale_color_viridis(name = "Pixel Count") +
+    geom_abline(
+      slope = 1,
+      intercept = c(-3.5, -2.5, -1.5, 1.5, 2.5, 3.5),
+      color = c("black", "gray30", "gray60", "gray60", "gray30", "black")
+    ) +
+    geom_text(
+      data = tibble(
+        x = c(0.5, 0.5, 0.5, 2.5, 3.5, 4.5),
+        y = c(4.5, 3.5, 2.5, 0.5, 0.5, 0.5),
+        label = c("+4", "+3", "+2", "-2", "-3", "-4")
+      ),
+      aes(
+        x = x,
+        y = y,
+        label = label
+      ),
+      inherit.aes = FALSE
+    ) +
+    geom_text(
+      data = tibble(x = 0.5, y = 0.5, label = "RTS Count/\nProbability Offset"),
+      aes(
+        x = x,
+        y = y,
+        label = label
+      ),
+      hjust = 0,
+      inherit.aes = FALSE
+    ) +
+    scale_x_continuous(
+      name = "RTS Probability Class",
+      limits = c(0.25, 5.25),
+      breaks = seq(1, 5),
+      labels = c("Low", "", "", "", "High")
+    ) +
+    scale_y_continuous(
+      name = "RTS Count Class (Mapped)",
+      limits = c(0.25, 5.25),
+      breaks = seq(1, 5),
+      labels = c("Low", "", "", "", "High")
+    ) +
+    guides(color = "legend") +
+    coord_fixed(expand = FALSE)
+)
+
+pixel_count_plots_prob
+```
+
+#### Regional Characteristics of Offsets
+
+```{r}
+region_offset_plots_prob <- map(
+  region_stats,
+  ~ ggplot(
+    .x,
+    aes(
+      x = name,
+      y = map_prob_offset
+    )
+  ) +
+    geom_hline(yintercept = 0, color = "gray50", linewidth = 0.3) +
+    geom_errorbar(
+      aes(
+        x = name,
+        ymin = map_prob_offset - map_prob_offset_sd,
+        ymax = map_prob_offset + map_prob_offset_sd
+      ),
+      width = 0,
+      lineend = "round"
+    ) +
+    geom_point(
+      aes(
+        fill = map_prob_offset
+      ),
+      shape = 21,
+      size = 5
+    ) +
+    scale_fill_gradient2(
+      limits = c(-4, 4),
+      guide = "none"
+    ) +
+    scale_x_continuous(name = "Region") +
+    scale_y_continuous(name = "Mapped RTS Count/\nRTS Probability Offset")
+)
+region_offset_plots_prob
+```
+
+#### Combined Figures
+
+```{r}
+combined_prob_offset_plots <- pmap(
+  list(
+    count_prob_maps,
+    pixel_count_plots_prob,
+    region_offset_plots_prob
+  ),
+  function(maps, count_plots, region_plots) {
+    maps +
+      (count_plots / region_plots) +
+      plot_layout(widths = c(1.5, 1))
+  }
+)
+combined_prob_offset_plots
+```
+
+
+# Why are Not-Missed and Shared numbers so different?
+Try dividing shared count (observed) by shared count (modeled) and mapping the results to look for places with high values.
+
+```{r}
+map2(
+  hex_grids,
+  hex_domains,
+  ~ map_hex_grid(
+    .x,
+    .y,
+    "shared_count_ratio",
+    label = "Ratio of Shared RTS Count\n(Observed to Modeled)",
+    transformation = "log10"
+  )
+)
+
+ggplot(hex_grids[["hex_grid_10k"]]) +
+  geom_point(
+    aes(x = rts_modeled_area, y = shared_count_ratio)
+  ) +
+  scale_x_continuous(trans = "log10")
+```
+
+Following visual inspection of the island in Russia with the exceptionally high value, it looks like our model was an RTS "lumper" while the lab that created the entries for ARTS subscribed to an RTS "splitter" philosophy. The model only identified a few very large RTS along the coast, while the labels split features that are contiguous into sub-RTS with borders that touched (or very nearly so).
