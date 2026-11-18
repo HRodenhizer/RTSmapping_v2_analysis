@@ -41,7 +41,14 @@ domain <- st_read("../RTSmapping_v2/domain/circumpolar_domain.geojson")
 ## RTS
 
 ```{r}
-rts <- st_read("../RTSMapping_v2_products/2025q3/south_rts_candidates.gpkg") |>
+rts <- st_read(
+  "./00_raw_data/inference_2025q3_south_products_rts_candidates_review_status_20261117T230236Z.geojson"
+) |>
+  st_transform(6931) # NSIDC EASE-Grid 2.0 North
+
+rts_candidates <- st_read(
+  "../RTSMapping_v2_products/2025q3/south_rts_candidates.gpkg"
+) |>
   st_transform(6931) # NSIDC EASE-Grid 2.0 North
 ```
 
@@ -195,10 +202,21 @@ ggplot() +
 
 ## Prep RTS Dataset
 
+### Filter Verified RTS
+
+```{r}
+rts_verified <- rts |>
+  filter(status == "rts") |>
+  mutate(rts_id = as.integer(rts_id))
+
+rts_verified_pt <- rts_verified |>
+  st_centroid()
+```
+
 ### Filter High Probability RTS
 
 ```{r}
-rts_high <- rts |>
+rts_high <- rts_candidates |>
   filter(conf_class == "high") |>
   mutate(rts_id = as.integer(rts_id))
 
@@ -213,14 +231,14 @@ rts_high_pt <- rts_high |>
 ### Nearest Neighbor Distances
 
 ```{r}
-nearest_features_idx <- st_nearest_feature(rts_high_pt)
+nearest_features_idx <- st_nearest_feature(rts_verified_pt)
 
 nearest_features <-
-  rts_pt$geometry[nearest_features_idx] |>
+  rts_verified_pt$geometry[nearest_features_idx] |>
   st_as_sf() |>
   rename(geometry = x)
 
-rts_high_pt <- rts_high_pt |>
+rts_verified_pt <- rts_verified_pt |>
   mutate(
     nn_dist_km = as.numeric(
       st_distance(
@@ -237,6 +255,16 @@ rts_high_pt <- rts_high_pt |>
 ### Write RTS Datasets
 
 ```{r}
+st_write(
+  rts_verified,
+  "./01_processed_data/verified_rts_poly.geojson"
+)
+
+st_write(
+  rts_verified_pt,
+  "./01_processed_data/verified_rts_pt.geojson"
+)
+
 st_write(
   rts_high,
   "./01_processed_data/high_prob_rts_poly.geojson"
@@ -264,7 +292,7 @@ ring_counts <- lapply(seq_along(lin), function(i) {
 }) |>
   bind_rows()
 
-bad_rings <- filter(ring_counts, n_pts < 3 # a closed ring needs at least 3 coordinates
+bad_rings <- filter(ring_counts, n_pts < 3) # a closed ring needs at least 3 coordinates
 bad_rings
 
 mountain_glaciers$Shape[[bad_rings$feature]][[bad_rings$part]]
