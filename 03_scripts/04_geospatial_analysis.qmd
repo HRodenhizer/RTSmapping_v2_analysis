@@ -450,7 +450,7 @@ diag <- smooth_diagnostics(
 Name regions:
 
 ```{r}
-rts_regions_smooth <- rts_regions_smooth |>
+rts_regions_smooth <- rts_regions_smooth %>%
   mutate(
     # name = as.integer(.region),
     name = c(
@@ -460,12 +460,22 @@ rts_regions_smooth <- rts_regions_smooth |>
       12,
       seq(12, 16)
     ) # This clean up is manual and will not be necessary if I can get the floor argument to work in SKATER
-  ) |>
-  st_intersection(domain) |>
+  ) %>%
   summarise(
     geometry = st_union(geometry),
-    .by = c("name", name, X, Y)
-  )
+    .by = c(name)
+  ) %>%
+  st_intersection(domain) %>%
+  mutate(
+    centroid = st_centroid(geometry),
+    .before = geometry
+  ) %>%
+  bind_cols(
+    .$centroid %>%
+      st_transform(4326) %>%
+      st_coordinates
+  ) |>
+  arrange(X)
 ```
 
 ## Visualize
