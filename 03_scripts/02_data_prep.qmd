@@ -26,6 +26,11 @@ Sys.setenv(OGR_ARC_STEPSIZE = "0.001")
 source("03_scripts/01_functions.R")
 ```
 
+## Set ggplot2 theme
+
+```{r}
+theme_set(theme_bw())
+```
 
 # Import Data
 
@@ -200,6 +205,59 @@ ggplot() +
 # )
 ```
 
+### Create Domain Grid
+Try 100 km x 100 km grids to start.
+
+```{r}
+grid_sizes <- c(10000, 50000, 100000) # in 10 km, 50 km, and 100 km side lengths in meters
+
+domain_grids <- map(
+  grid_sizes,
+  ~ domain |>
+    st_make_grid(
+      cellsize = c(.x, .x),
+      square = TRUE
+    ) |>
+    st_as_sf() |>
+    rename(geometry = x) |>
+    st_filter(domain)
+)
+
+grid_names <- paste0("domain_grid_", format((grid_sizes/1000), scientific = FALSE), "km")
+names(domain_grids) <- grid_names
+```
+
+```{r}
+map(
+  domain_grids,
+  ~ ggplot() +
+    geom_sf(
+      data = domain,
+      color = "black",
+      fill = "gray95",
+      linewidth = 0.4
+    ) +
+    geom_sf(
+      data = .x,
+      color = "black",
+      fill = "transparent"
+    )
+)
+```
+
+```{r}
+map2(
+  domain_grids,
+  grid_names,
+  ~ st_write(
+    .x,
+    paste0("./01_processed_data/", .y, ".geojson"),
+    delete.dsn = TRUE
+  )
+)
+```
+
+
 ## Prep RTS Dataset
 
 ### Filter Verified RTS
@@ -242,7 +300,7 @@ rts_verified_pt <- rts_verified_pt |>
   mutate(
     nn_dist_km = as.numeric(
       st_distance(
-        st_transform(rts_pt, 4326),
+        st_transform(rts_verified_pt, 4326),
         st_transform(nearest_features, 4326),
         by_element = TRUE
       )
