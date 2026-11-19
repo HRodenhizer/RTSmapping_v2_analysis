@@ -3,7 +3,7 @@ directories <- c(
   "00_raw_data",
   "01_processed_data",
   "03_scripts",
-  "04_graphs",
+  "04_figures",
   "05_tables"
 )
 
