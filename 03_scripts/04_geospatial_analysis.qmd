@@ -3,10 +3,6 @@ title: "RTS Geospatial Analysis"
 format: html
 ---
 
-# TODO:
-- add other RTS characteristics to SKATER clustering algorithm?
-- smooth regions after clustering (smoothr has options)
-
 # Set-Up
 
 ## Libraries
@@ -41,13 +37,15 @@ theme_set(theme_bw())
 ## RTS
 
 ```{r}
-rts_pt <- st_read("./01_processed_data/high_prob_rts_pt.geojson")
+high_prob_rts_pt <- st_read("./01_processed_data/high_prob_rts_pt.geojson")
+rts_pt <- st_read("./01_processed_data/verified_rts_pt.geojson")
 ```
 
 ## Domain
 
 ```{r}
 domain <- st_read("./01_processed_data/domain_south_clean.geojson")
+domain_grid <- st_read("./01_processed_data/domain_grid_50km.geojson")
 ```
 
 ## Environmental Predictors
@@ -123,6 +121,8 @@ world_north <- world %>%
   st_make_valid() |>
   st_intersection(crop_poly) %>%
   st_transform(crs = st_crs(rts_pt))
+
+rm(russia)
 ```
 
 # Map RTS (First Look)
@@ -158,6 +158,45 @@ ggplot() +
   theme_void()
 ```
 
+## Compare High Probability to Verified RTS
+
+```{r}
+ggplot() +
+  geom_sf(
+    data = world_north,
+    color = "transparent",
+    fill = "gray70"
+  ) +
+  geom_sf(
+    data = domain,
+    color = "black",
+    fill = "gray95",
+    linewidth = 0.4
+  ) +
+  geom_sf(
+    data = high_prob_rts_pt,
+    color = "gray80",
+    size = 2
+  ) +
+  geom_sf(
+    data = rts_pt,
+    color = "darkred",
+    size = 0.7
+  ) +
+  geom_sf(
+    data = world_north,
+    fill = "transparent"
+  ) +
+  geom_sf(
+    data = crop_poly,
+    color = "black",
+    fill = "transparent"
+  ) +
+  # coord_sf(expand = FALSE) +
+  theme_void()
+```
+
+
 # RTS Clustering
 
 ## Chi-squared Test
@@ -186,10 +225,23 @@ Some expected counts are small; chi^2 approximation may be inaccurate
 	Chi-squared test of CSR using quadrat counts
 
 data:  rts_pt_pattern
-X2 = 442331, df = 236, p-value < 2.2e-16
+X2 = 531594, df = 236, p-value < 2.2e-16
 alternative hypothesis: two.sided
 
 Quadrats: 237 tiles (irregular windows)
+
+
+Old results from high prob RTS:
+  Warning message:
+  Some expected counts are small; chi^2 approximation may be inaccurate 
+
+    Chi-squared test of CSR using quadrat counts
+
+  data:  rts_pt_pattern
+  X2 = 442331, df = 236, p-value < 2.2e-16
+  alternative hypothesis: two.sided
+
+  Quadrats: 237 tiles (irregular windows)
 
 ## Nearest Neighbor Distances
 
@@ -198,7 +250,34 @@ ggplot(
   data = rts_pt,
   aes(x = nn_dist_km)
 ) +
-  geom_histogram(aes(y = after_stat(count) / sum(after_stat(count)))) +
+  geom_histogram(
+    data = high_prob_rts_pt,
+    aes(
+      x = nn_dist_km,
+      y = after_stat(count) / sum(after_stat(count)),
+      # color = "High Probability RTS",
+      fill = "High Probability RTS"
+    ),
+    inherit.aes = FALSE
+  ) +
+  geom_histogram(
+    aes(
+      y = after_stat(count) / sum(after_stat(count)),
+      # color = "Verified RTS",
+      fill = "Verified RTS"
+    ),
+    alpha = 0.7
+  ) +
+  # scale_color_manual(
+  #   name = "RTS Dataset",
+  #   breaks = c("High Probability RTS", "Verified RTS"),
+  #   values = c("gray80", "darkred")
+  # ) +
+  scale_fill_manual(
+    name = "RTS Dataset",
+    breaks = c("High Probability RTS", "Verified RTS"),
+    values = c("gray80", "darkred")
+  ) +
   scale_x_continuous(
     name = "Nearest Neighbor Distance (km)",
     transform = "log10"
@@ -214,87 +293,29 @@ ggplot(
 # RTS Regions
 This section creates RTS regions (spatially contiguous hotspot and coldspot regions) using the SKATER (Spatial 'K'luster Analysis by Tree Edge Removal) algorithm. Since RTS count is the attribute of interest for this clustering, I have first gridded the entire region and extracted RTS counts. 
 
-## Create Grid
-Try 100 km x 100 km grids to start.
-
-```{r}
-# rts_grid <- domain |>
-#   st_make_grid(
-#     cellsize = c(100000, 100000),
-#     square = TRUE
-#   ) |>
-#   st_as_sf() |>
-#   rename(geometry = x)
-
-# rts_grid <- rts_grid |>
-#   st_filter(domain)
-```
-
-```{r}
-# ggplot() +
-#   geom_sf(
-#     data = world_north,
-#     color = "transparent",
-#     fill = "gray70"
-#   ) +
-#   geom_sf(
-#     data = domain,
-#     color = "black",
-#     fill = "gray95",
-#     linewidth = 0.4
-#   ) +
-#   geom_sf(
-#     data = world_north,
-#     fill = "transparent"
-#   ) +
-#   geom_sf(
-#     data = rts_pt,
-#     color = "darkred",
-#     size = 0.5
-#   ) +
-#   geom_sf(
-#     data = rts_grid,
-#     color = "black",
-#     fill = "transparent"
-#   ) +
-#   geom_sf(
-#     data = crop_poly,
-#     color = "black",
-#     fill = "transparent"
-#   ) +
-#   # coord_sf(expand = FALSE) +
-#   theme_void()
-```
-
-```{r}
-# st_write(
-#   rts_grid,
-#   "./01_processed_data/rts_grid.geojson"
-# )
-rts_grid <- st_read("./01_processed_data/rts_grid.geojson")
-```
-
 ## Gridded Variables
 
 ### RTS Counts
 
 ```{r}
-rts_grid <- rts_grid |>
+domain_grid <- domain_grid |>
   st_join(rts_pt) |>
   summarise(
-    rts_count = n(),
+    rts_count = sum(!is.na(rts_id)),
     .by = geometry
   ) |>
   mutate(
-    rts_count_log10 = log10(rts_count),
+    rts_count_log10 = case_when(
+      rts_count > 0 ~ log10(rts_count),
+      TRUE ~ -2
+    ),
     .after = rts_count
   )
 ```
 
 ```{r}
 ggplot(
-  rts_grid |>
-    filter(rts_count > 1),
+  domain_grid,
   aes(x = rts_count)
 ) +
   geom_histogram()
@@ -302,7 +323,7 @@ ggplot(
 ggplot() +
   geom_sf(data = world_north) +
   geom_sf(
-    data = rts_grid,
+    data = domain_grid,
     aes(color = rts_count, fill = rts_count)
   ) +
   scale_color_viridis(
@@ -324,14 +345,41 @@ ggplot() +
   ) +
   # coord_sf(expand = FALSE) +
   theme_void()
+
+ggplot() +
+  geom_sf(data = world_north) +
+  geom_sf(
+    data = domain_grid,
+    aes(color = rts_count_log10, fill = rts_count_log10)
+  ) +
+  scale_color_viridis(
+    name = "RTS Count\n(modified log10)",
+    # trans = "log10"
+  ) +
+  scale_fill_viridis(
+    name = "RTS Count\n(modified log10)",
+    # trans = "log10"
+  ) +
+  geom_sf(
+    data = world_north,
+    fill = "transparent"
+  ) +
+  geom_sf(
+    data = crop_poly,
+    color = "black",
+    fill = "transparent"
+  ) +
+  # coord_sf(expand = FALSE) +
+  theme_void()
 ```
 
 ### Environmental Variables
+This is slow, so re-run judiciously.
 
 ```{r}
-# env_pred_100km <- terra::extract(
+# env_pred_50km <- terra::extract(
 #   env_pred,
-#   vect(rts_grid),
+#   vect(domain_grid),
 #   fun = mean,
 #   exact = TRUE,
 #   na.rm = TRUE
@@ -339,27 +387,32 @@ ggplot() +
 #   select(-ID)
 
 # write_csv(
-#   env_pred_100km,
-#   "./01_processed_data/env_predictors_rts_grid_aligned.csv"
+#   env_pred_50km,
+#   "./01_processed_data/env_predictors_domain_grid_aligned_50km.csv"
 # )
-env_pred_100km <- read_csv(
-  "./01_processed_data/env_predictors_rts_grid_aligned.csv"
+env_pred_50km <- read_csv(
+  "./01_processed_data/env_predictors_domain_grid_aligned_50km.csv"
 )
 
-rts_grid <- rts_grid |>
-  bind_cols(env_pred_100km)
+domain_grid <- domain_grid |>
+  bind_cols(env_pred_50km) |>
+  mutate(grid_area = 2500)
 ```
 
 ## SKATER
+The floor based on cell area (used to enforce a minimum region size) is not working. The algorithm is returning more regions than requested, except when it thinks the floor is too big and it reduces the number of regions to 1. I am unable to get it to work with a reasonable floor size; it tells me the floor is too big before it reaches a size that would actually get rid of small regions.
+
+Could also try with queen adjacency again.
 
 ```{r}
 rts_regions <- skater(
-  rts_grid %>%
-    select(rts_count_log10, glacial_extent_lgm, ecoregions),
-  # attrs = c("rts_count_log10"),
+  domain_grid,
+  attrs = c("rts_count_log10", "glacial_extent_lgm", "ecoregions"),
   weights = "rook",
-  n_regions = 14,
+  n_regions = 16,
   bridge_islands = TRUE,
+  # floor = "grid_area",
+  # floor_value = 20000,
   seed = 42
 ) %>%
   summarize(geometry = st_union(geometry), .by = .region) %>%
@@ -373,8 +426,7 @@ rts_regions <- skater(
 ```
 
 ## Clean-Up
-Smoothing doesn't maintain shared edges - can do this in ArcGIS Pro, instead (https://doc.esri.com/en/arcgis-pro/latest/tool-reference/cartography/smooth-shared-edges.html?tabs=dialog).
-Clip to land area:
+Smooth and clip to land area:
 
 ```{r}
 rts_regions_smooth <- rts_regions |>
@@ -394,12 +446,20 @@ diag <- smooth_diagnostics(
 )
 ```
 
+
 Name regions:
 
 ```{r}
 rts_regions_smooth <- rts_regions_smooth |>
   mutate(
-    name = 1:n()
+    # name = as.integer(.region),
+    name = c(
+      seq(1, 4),
+      seq(4, 8),
+      seq(8, 12),
+      12,
+      seq(12, 16)
+    ) # This clean up is manual and will not be necessary if I can get the floor argument to work in SKATER
   ) |>
   st_intersection(domain) |>
   summarise(
@@ -419,11 +479,11 @@ ggplot() +
   ) +
   scale_color_viridis() +
   scale_fill_viridis() +
-  geom_sf(
-    data = rts_regions,
-    color = "purple",
-    fill = "transparent"
-  ) +
+  # geom_sf(
+  #   data = rts_regions,
+  #   color = "purple",
+  #   fill = "transparent"
+  # ) +
   geom_sf(
     data = domain,
     fill = "transparent"
@@ -441,12 +501,47 @@ ggplot() +
   theme_void()
 ```
 
+```{r}
+ggplot() +
+  geom_sf(data = world_north) +
+  geom_sf(
+    data = domain_grid,
+    aes(color = rts_count_log10, fill = rts_count_log10)
+  ) +
+  scale_color_viridis(
+    name = "RTS Count\n(modified log10)",
+    # trans = "log10"
+  ) +
+  scale_fill_viridis(
+    name = "RTS Count\n(modified log10)",
+    # trans = "log10"
+  ) +
+  geom_sf(
+    data = rts_regions_smooth,
+    color = "yellow",
+    fill = "transparent"
+  ) +
+  geom_sf(
+    data = rts_regions,
+    color = "purple",
+    fill = "transparent"
+  ) +
+  geom_sf(
+    data = crop_poly,
+    color = "black",
+    fill = "transparent"
+  ) +
+  # coord_sf(expand = FALSE) +
+  theme_void()
+```
+
 ## Save Regions
 
 ```{r}
 # st_write(
 #   rts_regions_smooth,
-#   "./01_processed_data/rts_regions.geojson"
+#   "./01_processed_data/rts_regions.geojson",
+#   delete_dsn = TRUE
 # )
 ```
 
@@ -462,28 +557,47 @@ CIRCLE (area compared to area of smallest circumscribing circle; need full geome
 I will start with Polsby-Popper as I have used previously due to it's simplicity.
 ```{r}
 rts_pt <- rts_pt |>
-  st_join(rts_regions |> select(.region, region_lon = X, region_lat = Y)) |>
+  st_join(rts_regions_smooth |> select(name, region_lon = X, region_lat = Y)) |>
   mutate(
     pp = (4 * pi * area_m2) / perimeter_m^2
   )
 
-rts_regions <- rts_regions |>
+rts_regions_smooth <- rts_regions_smooth |>
   full_join(
     rts_pt |>
       st_drop_geometry() |>
       summarise(
         mean_pp = mean(pp),
         mean_area_m2 = mean(area_m2),
-        .by = .region
+        .by = name
       ),
-    by = ".region"
+    by = "name"
+  )
+
+high_prob_rts_pt <- high_prob_rts_pt |>
+  st_join(rts_regions_smooth |> select(name, region_lon = X, region_lat = Y)) |>
+  mutate(
+    pp = (4 * pi * area_m2) / perimeter_m^2
+  )
+
+rts_regions_smooth <- rts_regions_smooth |>
+  full_join(
+    rts_pt |>
+      st_drop_geometry() |>
+      summarise(
+        mean_pp = mean(pp),
+        mean_area_m2 = mean(area_m2),
+        .by = name
+      ),
+    by = "name"
   )
 ```
 
-Size by Region
+### Size by Region
 
+Violin Plots
 ```{r}
-ggplot(rts_pt, aes(x = .region, y = area_m2)) +
+ggplot(rts_pt, aes(x = name, y = area_m2, group = name)) +
   geom_violin() +
   scale_x_discrete(name = "Region") +
   scale_y_continuous(name = expression("Area (m"^2 * ")"))
@@ -492,20 +606,27 @@ ggplot(
   rts_pt,
   aes(x = area_m2, y = round(region_lat, 2), group = round(region_lat, 2))
 ) +
-  geom_violin() +
+  geom_violin(aes(color = name, fill = name)) +
+  scale_color_viridis(name = "Region") +
+  scale_fill_viridis(name = "Region") +
   scale_x_continuous(name = expression("Area (m"^2 * ")")) +
   scale_y_continuous(name = "Region Latitude (Centroid)")
 ```
 
+Map
 ```{r}
 ggplot() +
   geom_sf(data = world_north) +
   geom_sf(
-    data = rts_regions,
+    data = rts_regions_smooth,
     aes(color = mean_area_m2, fill = mean_area_m2)
   ) +
-  scale_color_viridis(name = expression("Area (m"^2 * ")")) +
-  scale_fill_viridis(name = expression("Area (m"^2 * ")")) +
+  scale_color_viridis(
+    name = expression("Area (m"^2 * ")")
+  ) +
+  scale_fill_viridis(
+    name = expression("Area (m"^2 * ")")
+  ) +
   geom_sf(
     data = world_north,
     fill = "transparent"
@@ -519,32 +640,81 @@ ggplot() +
   theme_void()
 ```
 
-Shape by Region
-
+Histogram comparison of high prob to verified
 ```{r}
-ggplot(rts_pt, aes(x = .region, y = pp)) +
+ggplot(
+  data = rts_pt,
+  aes(x = area_m2)
+) +
+  geom_histogram(
+    data = high_prob_rts_pt,
+    aes(
+      x = area_m2,
+      y = after_stat(count) / sum(after_stat(count)),
+      # color = "High Probability RTS",
+      fill = "High Probability RTS"
+    ),
+    inherit.aes = FALSE
+  ) +
+  geom_histogram(
+    aes(
+      y = after_stat(count) / sum(after_stat(count)),
+      # color = "Verified RTS",
+      fill = "Verified RTS"
+    ),
+    alpha = 0.7
+  ) +
+  # scale_color_manual(
+  #   name = "RTS Dataset",
+  #   breaks = c("High Probability RTS", "Verified RTS"),
+  #   values = c("gray80", "darkred")
+  # ) +
+  scale_fill_manual(
+    name = "RTS Dataset",
+    breaks = c("High Probability RTS", "Verified RTS"),
+    values = c("gray80", "darkred")
+  ) +
+  scale_x_continuous(
+    name = expression("Area (km"^2 * ")"),
+    transform = "log10"
+  ) +
+  scale_y_continuous(
+    name = "Percent",
+    expand = expansion(mult = c(0, 0.05)),
+    labels = scales::percent
+  )
+```
+
+### Shape by Region
+
+Violin Plots
+```{r}
+ggplot(rts_pt, aes(x = name, y = pp, group = name)) +
   geom_violin() +
   scale_x_discrete(name = "Region") +
-  scale_y_continuous(name = expression("Shape"))
+  scale_y_continuous(name = expression("Circularity"))
 
 ggplot(
   rts_pt,
   aes(x = pp, y = round(region_lat, 2), group = round(region_lat, 2))
 ) +
-  geom_violin() +
-  scale_x_continuous(name = expression("Shape")) +
+  geom_violin(aes(color = name, fill = name)) +
+  scale_color_viridis(name = "Region") +
+  scale_fill_viridis(name = "Region") +
+  scale_x_continuous(name = expression("Circularity")) +
   scale_y_continuous(name = "Region Latitude (Centroid)")
 ```
 
+Map
 ```{r}
 ggplot() +
   geom_sf(data = world_north) +
   geom_sf(
-    data = rts_regions,
+    data = rts_regions_smooth,
     aes(color = mean_pp, fill = mean_pp)
   ) +
-  scale_color_viridis(name = expression("Shape")) +
-  scale_fill_viridis(name = expression("Shape")) +
+  scale_color_viridis(name = expression("Circularity")) +
+  scale_fill_viridis(name = expression("Circularity")) +
   geom_sf(
     data = world_north,
     fill = "transparent"
@@ -556,6 +726,50 @@ ggplot() +
   ) +
   # coord_sf(expand = FALSE) +
   theme_void()
+```
+
+Histogram comparison of high prob to verified
+```{r}
+ggplot(
+  data = rts_pt,
+  aes(x = pp)
+) +
+  geom_histogram(
+    data = high_prob_rts_pt,
+    aes(
+      x = pp,
+      y = after_stat(count) / sum(after_stat(count)),
+      # color = "High Probability RTS",
+      fill = "High Probability RTS"
+    ),
+    inherit.aes = FALSE
+  ) +
+  geom_histogram(
+    aes(
+      y = after_stat(count) / sum(after_stat(count)),
+      # color = "Verified RTS",
+      fill = "Verified RTS"
+    ),
+    alpha = 0.7
+  ) +
+  # scale_color_manual(
+  #   name = "RTS Dataset",
+  #   breaks = c("High Probability RTS", "Verified RTS"),
+  #   values = c("gray80", "darkred")
+  # ) +
+  scale_fill_manual(
+    name = "RTS Dataset",
+    breaks = c("High Probability RTS", "Verified RTS"),
+    values = c("gray80", "darkred")
+  ) +
+  scale_x_continuous(
+    name = "Circularity"
+  ) +
+  scale_y_continuous(
+    name = "Percent",
+    expand = expansion(mult = c(0, 0.05)),
+    labels = scales::percent
+  )
 ```
 
 ## TODO: RTS Type by Region?
