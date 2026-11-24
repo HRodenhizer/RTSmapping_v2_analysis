@@ -4,10 +4,9 @@ format: html
 ---
 
 # TODO:
-- Next time start at classify values!
-- Combine 05 and 06 scripts into one to reduce repeated code. Or split out data prep sections into data prep?
-- Investigate why not missed and shared counts are so different.
 - Investigate where counts were very different than expected. Apply some sort of label for lower/higher than expected counts. Aggregate by region.
+- Use mapped to observed ratio to look at regional characteristics of RTS that are causing our model to miss RTS in certain areas.
+- Compare mapped RTS to training data.
 
 # Set-Up
 
@@ -40,21 +39,37 @@ theme_set(theme_bw())
 ## RTS
 
 ```{r}
-rts_pt <- st_read("./01_processed_data/high_prob_rts_pt.geojson")
-rts_poly <- st_read("./01_processed_data/high_prob_rts_poly.geojson")
+# rts_pt <- st_read("./01_processed_data/high_prob_rts_pt.geojson")
+# rts_poly <- st_read("./01_processed_data/high_prob_rts_poly.geojson")
+rts_pt <- st_read("./01_processed_data/verified_rts_pt.geojson")
+rts_poly <- st_read("./01_processed_data/verified_rts_poly.geojson")
 ```
 
 ## ARTS
 
 ```{r}
-arts <- st_read(
+arts_pos <- st_read(
   "../ARTS/ARTS_main_dataset/v.6.0.0/ARTS_main_dataset_v.6.0.0.geojson"
 ) |>
   st_transform(st_crs(rts_poly)) |>
-  filter(TrainClass == "Positive")
+  filter(TrainClass == "Positive") |>
+  st_make_valid()
+
+arts_pos_dedup <- arts_pos |>
+  summarise(
+    geometry = st_union(geometry),
+    .by = UID
+  )
 ```
 
-## RTS Probability
+## Training Dataset
+
+```{r}
+train_poly <- st_read("./00_raw_data/all_positive_labels.geojson") |>
+  st_transform(st_crs(rts_poly))
+```
+
+## RTS Susceptibility
 
 ```{r}
 rts_prob <- rast(
@@ -142,31 +157,31 @@ world_north <- world %>%
 ## New RTS
 ```{r}
 new_rts <- rts_poly |>
-  filter(lengths(st_intersects(rts_poly, arts)) == 0)
+  filter(lengths(st_intersects(rts_poly, arts_pos_dedup)) == 0)
 ```
 
 ## Shared RTS
 
 ```{r}
 shared_rts_map <- rts_poly |>
-  filter(lengths(st_intersects(rts_poly, arts)) >= 1)
+  filter(lengths(st_intersects(rts_poly, arts_pos_dedup)) >= 1)
 
-shared_rts_obs <- arts |>
-  filter(lengths(st_intersects(arts, rts_poly)) >= 1)
+shared_rts_obs <- arts_pos_dedup |>
+  filter(lengths(st_intersects(arts_pos_dedup, rts_poly)) >= 1)
 ```
 
 ## Missed RTS
 
 ```{r}
-missed_rts <- arts |>
-  filter(lengths(st_intersects(arts, rts_poly)) == 0)
+missed_rts <- arts_pos_dedup |>
+  filter(lengths(st_intersects(arts_pos_dedup, rts_poly)) == 0)
 ```
 
-## RTS Subset STatistics
+## RTS Subset Statistics
 Make a table/infographic with these?
 ```{r}
 (rts_count <- nrow(rts_poly))
-(arts_count <- nrow(arts))
+(arts_count <- nrow(arts_pos_dedup))
 (new_rts_count <- nrow(new_rts))
 (shared_rts_map_count <- nrow(shared_rts_map))
 (shared_rts_obs_count <- nrow(shared_rts_obs))
@@ -228,7 +243,7 @@ hex_grids <- map(
     ) |>
     # observed ARTS count
     left_join(
-      arts |>
+      arts_pos_dedup |>
         st_join(.x) |>
         st_drop_geometry() |>
         summarise(
@@ -283,7 +298,11 @@ hex_grids <- map(
     ) |>
     mutate(
       missed_rts_percent = missed_rts_count / arts_obs_count,
-      new_rts_percent = new_rts_count / arts_obs_count,
+      new_rts_percent = case_when(
+        !is.na(arts_obs_count) ~ new_rts_count / arts_obs_count,
+        is.na(arts_obs_count) & !is.na(rts_map_count) ~ 1,
+        TRUE ~ NA
+      ),
       map_obs_ratio = rts_map_count / arts_obs_count,
       shared_count_ratio = shared_rts_obs_count / shared_rts_map_count,
       rts_map_count = case_when(
@@ -299,7 +318,7 @@ hex_grids <- map(
 )
 ```
 
-### RTS Probability
+### RTS Susceptibility
 
 ```{r}
 hex_grids <- map(
@@ -342,7 +361,7 @@ map(
         geom_histogram(aes(x = arts_obs_count)) +
         scale_x_continuous(trans = "log10"),
 
-      # RTS Count (Mapped)
+      # RTS Susceptibility
       ggplot(data = .x) +
         geom_histogram(aes(x = rts_prob))
     )
@@ -360,7 +379,7 @@ count_breaks <- map(
         .x |>
           filter(rts_map_count != 0) |>
           pull(rts_map_count),
-        probs = c(0.5, 0.8, 0.95, 1)
+        probs = c(0.5, 0.9, 1)
       )
     ),
     "arts_obs_count" = c(
@@ -369,7 +388,7 @@ count_breaks <- map(
         .x |>
           filter(arts_obs_count != 0) |>
           pull(arts_obs_count),
-        probs = c(0.5, 0.8, 0.95, 1)
+        probs = c(0.5, 0.9, 1)
       )
     ),
     "rts_prob" = c(
@@ -378,7 +397,7 @@ count_breaks <- map(
         .x |>
           filter(rts_prob != 0) |>
           pull(rts_prob),
-        probs = c(0.5, 0.8, 0.95, 1)
+        probs = c(0.5, 0.9, 1)
       ) |>
         round(2)
     )
@@ -558,6 +577,25 @@ custom_palette_5 <- c(
   "4-5" = "#5D2A4E",
   "5-5" = "#55002D"
 )
+
+custom_palette_4 <- c(
+  "1-1" = "#FFFFFF",
+  "2-1" = "#FED0C7",
+  "3-1" = "#F6A192",
+  "4-1" = "#E8705F",
+  "1-2" = "#C5D5E9",
+  "2-2" = "#C8A8B3",
+  "3-2" = "#C27B7F",
+  "4-2" = "#B54C4E",
+  "1-3" = "#89ACD4",
+  "2-3" = "#92819E",
+  "3-3" = "#8F576C",
+  "4-3" = "#84283E",
+  "1-4" = "#4385BE",
+  "2-4" = "#5C5D8A",
+  "3-4" = "#5F3559",
+  "4-4" = "#55002D"
+)
 ```
 
 ```{r}
@@ -572,11 +610,14 @@ bi_legend_location <- c(
 ### Pixel Count Plots
 
 ```{r}
-offset_bands <- tibble(
+offset_bands_5 <- tibble(
   x = c(
     c(3.75, 5.25),
     c(2.75, 3.75, 5.25),
     c(1.75, 2.75, 5.25),
+    c(0.75, 1.75, 5.25),
+    c(0.25, 0.75, 4.75, 5.25),
+    c(0.25, 3.75, 4.75),
     c(0.25, 2.75, 3.75),
     c(0.25, 1.75, 2.75),
     c(0.25, 1.75)
@@ -585,6 +626,9 @@ offset_bands <- tibble(
     c(0.25, 0.25),
     c(0.25, 0.25, 1.75),
     c(0.25, 0.25, 2.75),
+    c(0.25, 0.25, 3.75),
+    c(0.25, 0.25, 4.25, 4.75),
+    c(0.75, 4.25, 5.25),
     c(1.75, 4.25, 5.25),
     c(2.75, 4.25, 5.25),
     c(3.75, 5.25)
@@ -593,11 +637,63 @@ offset_bands <- tibble(
     c(0.25, 1.75),
     c(0.25, 1.25, 2.75),
     c(0.25, 1.25, 3.75),
+    c(0.25, 1.25, 4.75),
+    c(0.75, 1.25, 5.25, 5.25),
+    c(1.75, 5.25, 5.25),
     c(2.75, 5.25, 5.25),
     c(3.75, 5.25, 5.25),
     c(5.25, 5.25)
   ),
-  band = c(rep(-4, 2), rep(-3, 3), rep(-2, 3), rep(2, 3), rep(3, 3), rep(4, 2))
+  band = c(
+    rep(-4, 2),
+    rep(-3, 3),
+    rep(-2, 3),
+    rep(-1, 3),
+    rep(0, 4),
+    rep(1, 3),
+    rep(2, 3),
+    rep(3, 3),
+    rep(4, 2)
+  )
+)
+
+offset_bands_4 <- tibble(
+  x = c(
+    c(2.75, 4.25),
+    c(1.75, 2.75, 4.25),
+    c(0.75, 1.75, 4.25),
+    c(0.25, 0.75, 3.75, 4.25),
+    c(0.25, 2.75, 3.75),
+    c(0.25, 1.75, 2.75),
+    c(0.25, 1.75)
+  ),
+  ymin = c(
+    c(0.25, 0.25),
+    c(0.25, 0.25, 1.75),
+    c(0.25, 0.25, 2.75),
+    c(0.25, 0.25, 3.25, 3.75),
+    c(0.75, 3.25, 4.25),
+    c(1.75, 3.25, 4.25),
+    c(2.75, 4.25)
+  ),
+  ymax = c(
+    c(0.25, 1.75),
+    c(0.25, 1.25, 2.75),
+    c(0.25, 1.25, 3.75),
+    c(0.75, 1.25, 4.25, 4.25),
+    c(1.75, 4.25, 4.25),
+    c(2.75, 4.25, 4.25),
+    c(4.25, 4.25)
+  ),
+  band = c(
+    rep(-3, 2),
+    rep(-2, 3),
+    rep(-1, 3),
+    rep(0, 4),
+    rep(1, 3),
+    rep(2, 3),
+    rep(3, 2)
+  )
 )
 ```
 
@@ -668,6 +764,7 @@ hex_maps <- map2(
       ### Dataset Comparison (Ratios and Percents)
       # New RTS Percent
       # Blue means we found more new RTS than we already knew about, red means we found fewer new RTS than we already knew about
+      # Values of 1 where assigned to areas with new RTS and no ARTS observations... so this is a bit confusing
       map_hex_grid(
         .x,
         .y,
@@ -705,6 +802,17 @@ hex_maps <- map2(
 hex_maps
 ```
 
+Save fine resolution count map:
+```{r}
+ggsave(
+  "./04_figures/verified_rts_count_map.jpg",
+  hex_maps[["hex_grid_10k"]][[1]],
+  height = 8.5,
+  width = 11,
+  units = "in"
+)
+```
+
 ## Mapped RTS Counts vs ARTS Observations
 
 ### Bivariate Maps
@@ -719,10 +827,10 @@ hex_maps_bi_arts <- pmap(
       "rts_map_count",
       "arts_obs_count",
       domains,
-      5,
+      4,
       breaks$rts_map_count,
       breaks$arts_obs_count,
-      custom_palette_5,
+      custom_palette_4,
       legend_loc = bi_legend_location,
       xlab = "RTS Count (Mapped)",
       ylab = "RTS Count (Observed)"
@@ -734,6 +842,7 @@ hex_maps_bi_arts
 ```
 
 ### Scatter Plots
+A slope of approximately 0.1 indicates that automated mapping identified approximately 1/10 of RTS in areas that have been previously mapped. 
 
 ```{r}
 map(
@@ -749,7 +858,7 @@ map(
 ### Offset Between Mapped RTS Count and ARTS Observations Count
 
 #### Univariate Maps
-Blue indicates we found a lot of RTS in a low probability area, while red indicates we found fewer RTS than the probability would indicate.
+Blue indicates we found a lot of RTS in a low susceptibility area, while red indicates we found fewer RTS than the susceptibility would indicate.
 
 ```{r}
 count_arts_maps <- map2(
@@ -801,7 +910,7 @@ pixel_count_plots_arts <- map(
   hex_grids,
   ~ ggplot(.x, aes(x = arts_obs_count_class, y = rts_map_count_class)) +
     geom_ribbon(
-      data = offset_bands,
+      data = offset_bands_4,
       aes(
         x = x,
         ymin = ymin,
@@ -809,7 +918,7 @@ pixel_count_plots_arts <- map(
         fill = band,
         group = band
       ),
-      alpha = 0.5,
+      # alpha = 0.5,
       inherit.aes = FALSE
     ) +
     scale_fill_gradient2(guide = "none") +
@@ -824,16 +933,25 @@ pixel_count_plots_arts <- map(
       range = c(2, 10)
     ) +
     # scale_color_viridis(name = "Pixel Count") +
-    geom_abline(
-      slope = 1,
-      intercept = c(-3.5, -2.5, -1.5, 1.5, 2.5, 3.5),
-      color = c("black", "gray30", "gray60", "gray60", "gray30", "black")
-    ) +
+    # geom_abline(
+    #   slope = 1,
+    #   intercept = c(-3.5, -2.5, -1.5, -0.5, 0.5, 1.5, 2.5, 3.5),
+    #   color = c(
+    #     "black",
+    #     "gray30",
+    #     "gray60",
+    #     "gray80",
+    #     "gray80",
+    #     "gray60",
+    #     "gray30",
+    #     "black"
+    #   )
+    # ) +
     geom_text(
       data = tibble(
-        x = c(0.5, 0.5, 0.5, 2.5, 3.5, 4.5),
-        y = c(4.5, 3.5, 2.5, 0.5, 0.5, 0.5),
-        label = c("+4", "+3", "+2", "-2", "-3", "-4")
+        x = c(0.5, 0.5, 0.5, 1.5, 2.5, 3.5),
+        y = c(3.5, 2.5, 1.5, 0.5, 0.5, 0.5),
+        label = c("+3", "+2", "+1", "-1", "-2", "-3")
       ),
       aes(
         x = x,
@@ -846,27 +964,27 @@ pixel_count_plots_arts <- map(
       data = tibble(
         x = 0.5,
         y = 0.5,
-        label = "Mapped RTS/\nARTS Observations Offset"
+        label = "Offset"
       ),
       aes(
         x = x,
         y = y,
         label = label
       ),
-      hjust = 0,
+      hjust = 0.18,
       inherit.aes = FALSE
     ) +
     scale_x_continuous(
       name = "ARTS Count Class (Observed)",
-      limits = c(0.25, 5.25),
-      breaks = seq(1, 5),
-      labels = c("Low", "", "", "", "High")
+      limits = c(0.25, 4.25),
+      breaks = seq(1, 4),
+      labels = c("Low", "", "", "High")
     ) +
     scale_y_continuous(
       name = "RTS Count Class (Mapped)",
-      limits = c(0.25, 5.25),
-      breaks = seq(1, 5),
-      labels = c("Low", "", "", "", "High")
+      limits = c(0.25, 4.25),
+      breaks = seq(1, 4),
+      labels = c("Low", "", "", "High")
     ) +
     guides(color = "legend") +
     coord_fixed(expand = FALSE)
@@ -917,6 +1035,9 @@ region_offset_plots_arts
 #### Combined Figures
 
 ```{r}
+#| fig-height: 7
+#| fig-width: 11
+
 combined_arts_offset_plots <- pmap(
   list(
     count_arts_maps,
@@ -924,15 +1045,26 @@ combined_arts_offset_plots <- pmap(
     region_offset_plots_arts
   ),
   function(maps, count_plots, region_plots) {
-    maps +
-      (count_plots / region_plots) +
-      plot_layout(widths = c(1.5, 1))
+    (maps +
+      (count_plots / region_plots)) +
+      plot_layout(widths = c(2, 1))
   }
 )
 combined_arts_offset_plots
 ```
 
-## Mapped RTS Counts vs RTS Probability
+Save fine resolution combined offset map
+```{r}
+ggsave(
+  "./04_figures/mapped_vs_arts_offset.jpg",
+  combined_arts_offset_plots[["hex_grid_10k"]],
+  height = 7,
+  width = 11,
+  units = "in"
+)
+```
+
+## Mapped RTS Counts vs RTS Susceptibility
 
 ### Bivariate Maps
 Redder colors indicate more RTS were mapped than predicted, while bluer colors indicate fewer RTS were mapped than predicted.
@@ -963,7 +1095,7 @@ hex_maps_bi_prob <- pmap(
       custom_palette_5,
       legend_loc = bi_legend_location,
       xlab = "RTS Count (Mapped)",
-      ylab = "RTS Probability"
+      ylab = "RTS Susceptibility"
     )
   }
 )
@@ -983,10 +1115,10 @@ map(
 )
 ```
 
-### Offset Between Mapped RTS Count and RTS Probability
+### Offset Between Mapped RTS Count and RTS Susceptibility
 
 #### Univariate Maps
-Blue indicates we found a lot of RTS in a low probability area, while red indicates we found fewer RTS than the probability would indicate.
+Blue indicates we found a lot of RTS in a low susceptibility area, while red indicates we found fewer RTS than the susceptibility would indicate.
 
 ```{r}
 count_prob_maps <- map2(
@@ -997,7 +1129,7 @@ count_prob_maps <- map2(
       .x,
       .y,
       variable = "map_prob_offset",
-      label = "Mapped RTS Count/\nRTS Probability Offset"
+      label = "Mapped RTS/\nSusceptibility Offset"
     ) +
       geom_sf(
         data = regions,
@@ -1010,12 +1142,12 @@ count_prob_maps <- map2(
         aes(label = name)
       ) +
       scale_color_gradient2(
-        name = "Mapped RTS Count/\nRTS Probability Offset",
+        name = "Mapped RTS/\nSusceptibility Offset",
         na.value = "transparent",
         limits = c(-4, 4)
       ) +
       scale_fill_gradient2(
-        name = "Mapped RTS Count/\nRTS Probability Offset",
+        name = "Mapped RTS/\nSusceptibility Offset",
         na.value = "transparent",
         limits = c(-4, 4)
       ) +
@@ -1030,7 +1162,7 @@ count_prob_maps <- map2(
 count_prob_maps
 ```
 
-#### Pixel Counts of RTS Count/RTS Probability Offsets
+#### Pixel Counts of RTS Count/RTS Susceptibility Offsets
 
 With size scaled points:
 ```{r}
@@ -1038,7 +1170,7 @@ pixel_count_plots_prob <- map(
   hex_grids,
   ~ ggplot(.x, aes(x = rts_prob_class, y = rts_map_count_class)) +
     geom_ribbon(
-      data = offset_bands,
+      data = offset_bands_4,
       aes(
         x = x,
         ymin = ymin,
@@ -1046,7 +1178,7 @@ pixel_count_plots_prob <- map(
         fill = band,
         group = band
       ),
-      alpha = 0.5,
+      # alpha = 0.5,
       inherit.aes = FALSE
     ) +
     scale_fill_gradient2(guide = "none") +
@@ -1061,45 +1193,58 @@ pixel_count_plots_prob <- map(
       range = c(2, 10)
     ) +
     # scale_color_viridis(name = "Pixel Count") +
-    geom_abline(
-      slope = 1,
-      intercept = c(-3.5, -2.5, -1.5, 1.5, 2.5, 3.5),
-      color = c("black", "gray30", "gray60", "gray60", "gray30", "black")
+    # geom_abline(
+    #   slope = 1,
+    #   intercept = c(-3.5, -2.5, -1.5, -0.5, 0.5, 1.5, 2.5, 3.5),
+    #   color = c(
+    #     "black",
+    #     "gray30",
+    #     "gray60",
+    #     "gray80",
+    #     "gray80",
+    #     "gray60",
+    #     "gray30",
+    #     "black"
+    #   )
+    # ) +
+    geom_text(
+      data = tibble(
+        x = c(0.5, 0.5, 0.5, 1.5, 2.5, 3.5),
+        y = c(3.5, 2.5, 1.5, 0.5, 0.5, 0.5),
+        label = c("+3", "+2", "+1", "-1", "-2", "-3")
+      ),
+      aes(
+        x = x,
+        y = y,
+        label = label
+      ),
+      inherit.aes = FALSE
     ) +
     geom_text(
       data = tibble(
-        x = c(0.5, 0.5, 0.5, 2.5, 3.5, 4.5),
-        y = c(4.5, 3.5, 2.5, 0.5, 0.5, 0.5),
-        label = c("+4", "+3", "+2", "-2", "-3", "-4")
+        x = 0.5,
+        y = 0.5,
+        label = "Offset"
       ),
       aes(
         x = x,
         y = y,
         label = label
       ),
-      inherit.aes = FALSE
-    ) +
-    geom_text(
-      data = tibble(x = 0.5, y = 0.5, label = "RTS Count/\nProbability Offset"),
-      aes(
-        x = x,
-        y = y,
-        label = label
-      ),
-      hjust = 0,
+      hjust = 0.18,
       inherit.aes = FALSE
     ) +
     scale_x_continuous(
-      name = "RTS Probability Class",
-      limits = c(0.25, 5.25),
-      breaks = seq(1, 5),
-      labels = c("Low", "", "", "", "High")
+      name = "RTS Susceptibility Class",
+      limits = c(0.25, 4.25),
+      breaks = seq(1, 4),
+      labels = c("Low", "", "", "High")
     ) +
     scale_y_continuous(
       name = "RTS Count Class (Mapped)",
-      limits = c(0.25, 5.25),
-      breaks = seq(1, 5),
-      labels = c("Low", "", "", "", "High")
+      limits = c(0.25, 4.25),
+      breaks = seq(1, 4),
+      labels = c("Low", "", "", "High")
     ) +
     guides(color = "legend") +
     coord_fixed(expand = FALSE)
@@ -1142,7 +1287,7 @@ region_offset_plots_prob <- map(
       guide = "none"
     ) +
     scale_x_continuous(name = "Region") +
-    scale_y_continuous(name = "Mapped RTS Count/\nRTS Probability Offset")
+    scale_y_continuous(name = "Mapped RTS/\nSusceptibility Offset")
 )
 region_offset_plots_prob
 ```
@@ -1150,6 +1295,9 @@ region_offset_plots_prob
 #### Combined Figures
 
 ```{r}
+#| fig-height: 7
+#| fig-width: 11
+
 combined_prob_offset_plots <- pmap(
   list(
     count_prob_maps,
@@ -1159,10 +1307,21 @@ combined_prob_offset_plots <- pmap(
   function(maps, count_plots, region_plots) {
     maps +
       (count_plots / region_plots) +
-      plot_layout(widths = c(1.5, 1))
+      plot_layout(widths = c(2, 1))
   }
 )
 combined_prob_offset_plots
+```
+
+Save fine resolution combined offset map
+```{r}
+ggsave(
+  "./04_figures/mapped_vs_susceptibility_offset.jpg",
+  combined_prob_offset_plots[["hex_grid_10k"]],
+  height = 7,
+  width = 11,
+  units = "in"
+)
 ```
 
 

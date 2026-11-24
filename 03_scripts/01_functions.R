@@ -134,7 +134,11 @@ map_hex_grid <- function(
   transformation
 ) {
   ggplot() +
-    geom_sf(data = world_north) +
+    geom_sf(
+      data = world_north,
+      color = "gray60",
+      fill = "gray90"
+    ) +
     geom_sf(
       data = data,
       aes(color = .data[[variable]], fill = .data[[variable]])
@@ -151,13 +155,14 @@ map_hex_grid <- function(
     ) +
     geom_sf(
       data = world_north,
+      color = "gray60",
       fill = "transparent"
     ) +
     geom_sf(
       data = domain,
       color = "black",
       fill = "transparent",
-      linewidth = 0.5
+      linewidth = 0.2
     ) +
     geom_sf(
       data = crop_poly,
