@@ -451,14 +451,15 @@ Name regions:
 
 ```{r}
 rts_regions_smooth <- rts_regions_smooth %>%
+  arrange(X) %>%
   mutate(
-    # name = as.integer(.region),
+    # name = seq(1, n())
     name = c(
-      seq(1, 4),
-      seq(4, 8),
-      seq(8, 12),
-      12,
-      seq(12, 16)
+      seq(1, 7),
+      seq(7, 11),
+      11,
+      seq(11, 15),
+      rep(15, 2)
     ) # This clean up is manual and will not be necessary if I can get the floor argument to work in SKATER
   ) %>%
   summarise(
@@ -572,18 +573,6 @@ rts_pt <- rts_pt |>
     pp = (4 * pi * area_m2) / perimeter_m^2
   )
 
-rts_regions_smooth <- rts_regions_smooth |>
-  full_join(
-    rts_pt |>
-      st_drop_geometry() |>
-      summarise(
-        mean_pp = mean(pp),
-        mean_area_m2 = mean(area_m2),
-        .by = name
-      ),
-    by = "name"
-  )
-
 high_prob_rts_pt <- high_prob_rts_pt |>
   st_join(rts_regions_smooth |> select(name, region_lon = X, region_lat = Y)) |>
   mutate(
@@ -597,6 +586,16 @@ rts_regions_smooth <- rts_regions_smooth |>
       summarise(
         mean_pp = mean(pp),
         mean_area_m2 = mean(area_m2),
+        .by = name
+      ),
+    by = "name"
+  ) |>
+  full_join(
+    high_prob_rts_pt |>
+      st_drop_geometry() |>
+      summarise(
+        mean_pp_high_prob = mean(pp),
+        mean_area_m2_high_prob = mean(area_m2),
         .by = name
       ),
     by = "name"
