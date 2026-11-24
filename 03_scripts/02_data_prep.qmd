@@ -43,14 +43,21 @@ domain <- st_read("../RTSmapping_v2/domain/circumpolar_domain.geojson")
 
 ```{r}
 rts <- st_read(
-  "./00_raw_data/inference_2025q3_south_products_rts_candidates_review_status_20261117T230236Z.geojson"
+  "./00_raw_data/rts_candidates_review_status_b172_20261124T110222Z.geojson"
 ) |>
   st_transform(6931) # NSIDC EASE-Grid 2.0 North
 
 rts_review_2 <- st_read(
   "./00_raw_data/rts_2025q3_20261117_hr_review.geojson"
 ) |>
-  st_transform(6931) # NSIDC EASE-Grid 2.0 North
+  st_transform(6931) |> # NSIDC EASE-Grid 2.0 North
+  select(-c(OBJECTID, Shape_Length, Shape_Area))
+
+rts_review_3 <- st_read(
+  "./00_raw_data/rts_2025q3_20261124_hr_review.geojson"
+) |>
+  st_transform(6931) |> # NSIDC EASE-Grid 2.0 North
+  select(-c(OBJECTID, Shape_Length, Shape_Area))
 
 rts_candidates <- st_read(
   "../RTSMapping_v2_products/2025q3/south_rts_candidates.gpkg"
@@ -268,12 +275,41 @@ map2(
 ### Filter Verified RTS
 
 ```{r}
-rts_verified <- rts |>
+rts_review <- rts_review_3 |>
+  st_drop_geometry() |>
   full_join(
-    rts_review_2 |> 
+    rts_review_2 |>
       st_drop_geometry(),
+    by = colnames(rts_review_3)[colnames(rts_review_3) != "geometry"]
+  ) |>
+  mutate(
+    keep = case_when(
+      n() == 1 ~ TRUE,
+      n() == 2 & !is.na(hr_round_2) ~ TRUE,
+      n() == 2 & is.na(hr_round_2) ~ FALSE
+    ),
+    .by = rts_id
+  ) |>
+  filter(keep == TRUE) |>
+  select(-keep)
+
+rts_review <- rts |>
+  full_join(
+    rts_review ,
     by = colnames(rts)[colnames(rts) != "geometry"]
-    ) |> 
+  )
+```
+
+```{r}
+# st_write(
+#   rts_review,
+#   "./01_processed_data/rts_2025q3_20261124_hr_review_all_merged.geojson",
+#   delete_dsn = TRUE
+# )
+```
+
+```{r}
+rts_verified <- rts_review |>
   mutate(
     hr_round_2 = case_when(
       hr_round_2 == 1 ~ "rts",
@@ -283,7 +319,8 @@ rts_verified <- rts |>
     ),
     # replace status with my status when it disagrees
     status = case_when(
-      status == "rts" & hr_round_2 %in% c("false_positive", "unsure") ~ hr_round_2,
+      status == "rts" &
+        hr_round_2 %in% c("false_positive", "unsure") ~ hr_round_2,
       TRUE ~ status
     )
   ) |>
@@ -292,6 +329,12 @@ rts_verified <- rts |>
 
 rts_verified_pt <- rts_verified |>
   st_centroid()
+```
+
+```{r}
+ggplot() +
+  geom_sf(data = domain_south) +
+  geom_sf(data = rts_verified_pt)
 ```
 
 ### Filter High Probability RTS
