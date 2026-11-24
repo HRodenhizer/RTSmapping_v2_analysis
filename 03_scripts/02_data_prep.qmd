@@ -16,10 +16,6 @@ library(tidyverse)
 library(viridis)
 ```
 
-```{r}
-Sys.setenv(OGR_ARC_STEPSIZE = "0.001")
-```
-
 ## Project Specific Functions
 
 ```{r}
@@ -48,6 +44,11 @@ domain <- st_read("../RTSmapping_v2/domain/circumpolar_domain.geojson")
 ```{r}
 rts <- st_read(
   "./00_raw_data/inference_2025q3_south_products_rts_candidates_review_status_20261117T230236Z.geojson"
+) |>
+  st_transform(6931) # NSIDC EASE-Grid 2.0 North
+
+rts_review_2 <- st_read(
+  "./00_raw_data/rts_2025q3_20261117_hr_review.geojson"
 ) |>
   st_transform(6931) # NSIDC EASE-Grid 2.0 North
 
@@ -223,7 +224,11 @@ domain_grids <- map(
     st_filter(domain)
 )
 
-grid_names <- paste0("domain_grid_", format((grid_sizes/1000), scientific = FALSE), "km")
+grid_names <- paste0(
+  "domain_grid_",
+  format((grid_sizes / 1000), scientific = FALSE),
+  "km"
+)
 names(domain_grids) <- grid_names
 ```
 
@@ -264,6 +269,24 @@ map2(
 
 ```{r}
 rts_verified <- rts |>
+  full_join(
+    rts_review_2 |> 
+      st_drop_geometry(),
+    by = colnames(rts)[colnames(rts) != "geometry"]
+    ) |> 
+  mutate(
+    hr_round_2 = case_when(
+      hr_round_2 == 1 ~ "rts",
+      hr_round_2 == 2 ~ "false_positive",
+      hr_round_2 == 3 ~ "unsure",
+      is.na(hr_round_2) ~ NA
+    ),
+    # replace status with my status when it disagrees
+    status = case_when(
+      status == "rts" & hr_round_2 %in% c("false_positive", "unsure") ~ hr_round_2,
+      TRUE ~ status
+    )
+  ) |>
   filter(status == "rts") |>
   mutate(rts_id = as.integer(rts_id))
 
@@ -315,23 +338,27 @@ rts_verified_pt <- rts_verified_pt |>
 ```{r}
 st_write(
   rts_verified,
-  "./01_processed_data/verified_rts_poly.geojson"
+  "./01_processed_data/verified_rts_poly.geojson",
+  delete_dsn = TRUE
 )
 
 st_write(
   rts_verified_pt,
-  "./01_processed_data/verified_rts_pt.geojson"
+  "./01_processed_data/verified_rts_pt.geojson",
+  delete_dsn = TRUE
 )
 
-st_write(
-  rts_high,
-  "./01_processed_data/high_prob_rts_poly.geojson"
-)
+# st_write(
+#   rts_high,
+#   "./01_processed_data/high_prob_rts_poly.geojson",
+#   delete_dsn = TRUE
+# )
 
-st_write(
-  rts_high_pt,
-  "./01_processed_data/high_prob_rts_pt.geojson"
-)
+# st_write(
+#   rts_high_pt,
+#   "./01_processed_data/high_prob_rts_pt.geojson",
+#   delete_dsn = TRUE
+# )
 ```
 
 ## Prep Glacier Data
