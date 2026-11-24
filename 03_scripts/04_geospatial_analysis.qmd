@@ -220,12 +220,14 @@ ggplot() +
 ```
 
 Warning message:
+21 points were rejected as lying outside the specified window 
+Warning message:
 Some expected counts are small; chi^2 approximation may be inaccurate 
 
 	Chi-squared test of CSR using quadrat counts
 
 data:  rts_pt_pattern
-X2 = 531594, df = 236, p-value < 2.2e-16
+X2 = 555467, df = 236, p-value < 2.2e-16
 alternative hypothesis: two.sided
 
 Quadrats: 237 tiles (irregular windows)
@@ -246,6 +248,9 @@ Old results from high prob RTS:
 ## Nearest Neighbor Distances
 
 ```{r}
+#| fig-height: 5
+#| fig-width: 6.5
+
 ggplot(
   data = rts_pt,
   aes(x = nn_dist_km)
@@ -287,6 +292,12 @@ ggplot(
     expand = expansion(mult = c(0, 0.05)),
     labels = scales::percent
   )
+
+# ggsave(
+#   "./04_figures/rts_nearest_neighbor_histogram.jpg",
+#   height = 6.5,
+#   width = 5
+# )
 ```
 
 
@@ -624,6 +635,9 @@ ggplot(
 
 Map
 ```{r}
+#| fig-height: 5
+#| fig-width: 6.5
+
 ggplot() +
   geom_sf(data = world_north) +
   geom_sf(
@@ -647,10 +661,19 @@ ggplot() +
   ) +
   # coord_sf(expand = FALSE) +
   theme_void()
+
+# ggsave(
+#   "./04_figures/rts_area_map.jpg",
+#   height = 5,
+#   width = 6.5
+#   )
 ```
 
 Histogram comparison of high prob to verified
 ```{r}
+#| fig-height: 5
+#| fig-width: 6.5
+
 ggplot(
   data = rts_pt,
   aes(x = area_m2)
@@ -692,6 +715,12 @@ ggplot(
     expand = expansion(mult = c(0, 0.05)),
     labels = scales::percent
   )
+
+# ggsave(
+#   "./04_figures/rts_area_histogram.jpg",
+#   height = 5,
+#   width = 6.5
+#   )
 ```
 
 ### Shape by Region
@@ -716,6 +745,9 @@ ggplot(
 
 Map
 ```{r}
+#| fig-height: 5
+#| fig-width: 6.5
+
 ggplot() +
   geom_sf(data = world_north) +
   geom_sf(
@@ -735,10 +767,19 @@ ggplot() +
   ) +
   # coord_sf(expand = FALSE) +
   theme_void()
+
+# ggsave(
+#   "./04_figures/rts_circularity_map.jpg",
+#   height = 5,
+#   width = 6.5
+#   )
 ```
 
 Histogram comparison of high prob to verified
 ```{r}
+#| fig-height: 5
+#| fig-width: 6.5
+
 ggplot(
   data = rts_pt,
   aes(x = pp)
@@ -779,6 +820,12 @@ ggplot(
     expand = expansion(mult = c(0, 0.05)),
     labels = scales::percent
   )
+
+# ggsave(
+#   "./04_figures/rts_circularity_histogram.jpg",
+#   height = 5,
+#   width = 6.5
+#   )
 ```
 
 ## TODO: RTS Type by Region?
