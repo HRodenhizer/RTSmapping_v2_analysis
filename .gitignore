@@ -1,6 +1,7 @@
 # Project specific data files
 /00_raw_data
 /01_processed_data
+/04_figures
 
 # QGIS files
 *.qgz
