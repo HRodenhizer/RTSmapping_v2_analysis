@@ -4,8 +4,8 @@ format: html
 ---
 
 # TODO:
-- Investigate where counts were very different than expected. Apply some sort of label for lower/higher than expected counts. Aggregate by region.
-- Use mapped to observed ratio to look at regional characteristics of RTS that are causing our model to miss RTS in certain areas.
+- Figure out why regional mapped/susceptibility offset values look wrong.
+- Use hex regions for all offset maps.
 - Compare mapped RTS to training data.
 
 # Set-Up
@@ -392,12 +392,11 @@ count_breaks <- map(
       )
     ),
     "rts_prob" = c(
-      0,
       quantile(
         .x |>
           filter(rts_prob != 0) |>
           pull(rts_prob),
-        probs = c(0.5, 0.9, 1)
+        probs = c(0.8, 0.9, 0.95, 1)
       ) |>
         round(2)
     )
@@ -423,8 +422,8 @@ hex_grids <- map2(
         rts_prob,
         breaks = .y$rts_prob
       ),
-      map_obs_offset = rts_map_count_class - arts_obs_count_class,
-      map_prob_offset = rts_map_count_class - rts_prob_class,
+      map_obs_offset = arts_obs_count_class - rts_map_count_class,
+      map_prob_offset = rts_prob_class - rts_map_count_class,
       .before = geometry
     ) |>
     rowwise() |>
@@ -482,64 +481,91 @@ hex_domains <- map(
 # Regional Stats
 
 ```{r}
-region_stats <- map2(
+hex_regions <- map(
   hex_grids,
-  count_breaks,
-  ~ regions |>
-    st_join(.x) |>
+  ~ .x |>
+    st_join(
+      regions,
+      largest = TRUE
+    ) |>
+    select(name, X, Y) |>
     summarise(
-      across(
-        !contains("class") & !contains("idx"),
-        list(mean = mean, sd = sd),
-        na.rm = TRUE
-      ),
-      .by = c(name, X, Y, geometry)
-    ) |>
-    mutate(
-      rts_map_count_class = classify_counts(
-        rts_map_count_mean,
-        breaks = .y$rts_map_count
-      ),
-      rts_map_count_class_sd = rts_map_count_sd /
-        (.y$rts_map_count[rts_map_count_class + 1] -
-          .y$rts_map_count[rts_map_count_class]),
-      arts_obs_count_class = classify_counts(
-        arts_obs_count_mean,
-        breaks = .y$arts_obs_count
-      ),
-      arts_obs_count_class_sd = arts_obs_count_sd /
-        (.y$arts_obs_count[arts_obs_count_class + 1] -
-          .y$arts_obs_count[arts_obs_count_class]),
-      rts_prob_class = classify_counts(
-        rts_prob_mean,
-        breaks = .y$rts_prob
-      ),
-      rts_prob_class_sd = rts_prob_sd /
-        (.y$rts_prob[rts_prob_class + 1] -
-          .y$rts_prob[rts_prob_class]),
-      map_obs_offset = rts_map_count_class - arts_obs_count_class,
-      map_obs_offset_sd = sqrt(
-        rts_map_count_class_sd^2 + arts_obs_count_class_sd^2
-      ),
-      map_prob_offset = rts_map_count_class - rts_prob_class,
-      map_prob_offset_sd = sqrt(
-        rts_map_count_class_sd^2 + rts_prob_class_sd^2
-      ),
-      .before = geometry
-    ) |>
-    rowwise() |>
-    mutate(
-      bi_class_arts = str_flatten(
-        c(rts_map_count_class, arts_obs_count_class),
-        collapse = "-"
-      ),
-      bi_class_prob = str_flatten(
-        c(rts_map_count_class, rts_prob_class),
-        collapse = "-"
-      ),
-      .before = geometry
-    ) |>
-    ungroup()
+      geometry = st_union(geometry),
+      .by = c(name, X, Y)
+    )
+)
+
+region_stats <- pmap(
+  list(hex_regions, hex_grids, count_breaks),
+  function(.x, .y, .z) {
+    .x |>
+      st_join(.y, join = st_covers) |>
+      summarise(
+        across(
+          # !contains("class") & !contains("idx"),
+          c(
+            rts_map_area,
+            rts_map_pp,
+            rts_map_count,
+            arts_obs_count,
+            rts_prob,
+            rts_map_count_class,
+            arts_obs_count_class,
+            rts_prob_class,
+            map_obs_offset,
+            map_prob_offset
+          ),
+          list(mean = mean, sd = sd),
+          na.rm = TRUE
+        ),
+        .by = c(name, X, Y, geometry)
+      ) |>
+      # mutate(
+      #   rts_map_count_class = classify_counts(
+      #     rts_map_count_mean,
+      #     breaks = .z$rts_map_count
+      #   ),
+      #   rts_map_count_class_sd = rts_map_count_sd /
+      #     (c(0, .z$rts_map_count)[rts_map_count_class + 1] -
+      #       c(0, .z$rts_map_count)[rts_map_count_class]),
+      #   arts_obs_count_class = classify_counts(
+      #     arts_obs_count_mean,
+      #     breaks = .z$arts_obs_count
+      #   ),
+      #   arts_obs_count_class_sd = arts_obs_count_sd /
+      #     (c(0, .z$arts_obs_count)[arts_obs_count_class + 1] -
+      #       c(0, .z$arts_obs_count)[arts_obs_count_class]),
+      #   rts_prob_class = classify_counts(
+      #     rts_prob_mean,
+      #     breaks = .z$rts_prob
+      #   ),
+      #   rts_prob_class_sd = rts_prob_sd /
+      #     (c(0, .z$rts_prob)[rts_prob_class + 1] -
+      #       c(0, .z$rts_prob)[rts_prob_class]),
+      #   map_obs_offset = arts_obs_count_class - rts_map_count_class,
+      #   map_obs_offset_sd = sqrt(
+      #     rts_map_count_class_sd^2 + arts_obs_count_class_sd^2
+      #   ),
+      #   map_prob_offset = rts_prob_class - rts_map_count_class,
+      #   map_prob_offset_sd = sqrt(
+      #     rts_map_count_class_sd^2 + rts_prob_class_sd^2
+      #   ),
+      #   .before = geometry
+      # ) |>
+      rowwise() |>
+      mutate(
+        bi_class_arts = str_flatten(
+          c(round(rts_map_count_class_mean), round(arts_obs_count_class_mean)),
+          collapse = "-"
+        ),
+        bi_class_prob = str_flatten(
+          c(round(rts_map_count_class_mean), round(rts_prob_class_mean)),
+          collapse = "-"
+        ),
+        .before = geometry
+      ) |>
+      ungroup()
+  }
 )
 ```
 
@@ -600,10 +626,17 @@ custom_palette_4 <- c(
 
 ```{r}
 bi_legend_location <- c(
-  left = 0.81,
+  left = 0.8,
   bottom = 0,
   right = 1,
-  top = 0.145
+  top = 0.18
+)
+
+bi_legend_location_left <- c(
+  left = 0,
+  bottom = 0,
+  right = 0.25,
+  top = 0.22
 )
 ```
 
@@ -804,13 +837,12 @@ hex_maps
 
 Save fine resolution count map:
 ```{r}
-ggsave(
-  "./04_figures/verified_rts_count_map.jpg",
-  hex_maps[["hex_grid_10k"]][[1]],
-  height = 8.5,
-  width = 11,
-  units = "in"
-)
+# ggsave(
+#   "./04_figures/verified_rts_count_map.jpg",
+#   hex_maps[["hex_grid_10k"]][[1]],
+#   height = 8.5,
+#   width = 11
+# )
 ```
 
 ## Mapped RTS Counts vs ARTS Observations
@@ -818,6 +850,9 @@ ggsave(
 ### Bivariate Maps
 
 ```{r}
+#| fig-height: 8.5
+#| fig-width: 8.5
+
 hex_maps_bi_arts <- pmap(
   list(hex_grids, hex_domains, count_breaks),
   function(grids, domains, breaks) {
@@ -831,14 +866,25 @@ hex_maps_bi_arts <- pmap(
       breaks$rts_map_count,
       breaks$arts_obs_count,
       custom_palette_4,
-      legend_loc = bi_legend_location,
+      legend_loc = bi_legend_location_left,
       xlab = "RTS Count (Mapped)",
-      ylab = "RTS Count (Observed)"
+      ylab = "ARTS Count (Observed)",
+      label_size = 12
     )
   }
 )
 
 hex_maps_bi_arts
+```
+
+Save fine resolution mapped vs ARTS bivariate map:
+```{r}
+# ggsave(
+#   "./04_figures/verified_rts_vs_arts_bivariate_map.jpg",
+#   hex_maps_bi_arts[["hex_grid_10k"]],
+#   height = 8.5,
+#   width = 8.5
+# )
 ```
 
 ### Scatter Plots
@@ -908,7 +954,7 @@ With size scaled points:
 ```{r}
 pixel_count_plots_arts <- map(
   hex_grids,
-  ~ ggplot(.x, aes(x = arts_obs_count_class, y = rts_map_count_class)) +
+  ~ ggplot(.x, aes(x = rts_map_count_class, y = arts_obs_count_class)) +
     geom_ribbon(
       data = offset_bands_4,
       aes(
@@ -975,13 +1021,13 @@ pixel_count_plots_arts <- map(
       inherit.aes = FALSE
     ) +
     scale_x_continuous(
-      name = "ARTS Count Class (Observed)",
+      name = "RTS Count Class (Mapped)",
       limits = c(0.25, 4.25),
       breaks = seq(1, 4),
       labels = c("Low", "", "", "High")
     ) +
     scale_y_continuous(
-      name = "RTS Count Class (Mapped)",
+      name = "ARTS Count Class (Observed)",
       limits = c(0.25, 4.25),
       breaks = seq(1, 4),
       labels = c("Low", "", "", "High")
@@ -1002,25 +1048,25 @@ region_offset_plots_arts <- map(
     .x,
     aes(
       x = name,
-      y = map_obs_offset
+      y = map_obs_offset_mean
     )
   ) +
     geom_hline(yintercept = 0, color = "gray50", linewidth = 0.3) +
     geom_errorbar(
       aes(
         x = name,
-        ymin = map_obs_offset - map_obs_offset_sd,
-        ymax = map_obs_offset + map_obs_offset_sd
+        ymin = map_obs_offset_mean - map_obs_offset_sd,
+        ymax = map_obs_offset_mean + map_obs_offset_sd
       ),
       width = 0,
       lineend = "round"
     ) +
     geom_point(
       aes(
-        fill = map_obs_offset
+        fill = map_obs_offset_mean
       ),
       shape = 21,
-      size = 5
+      size = 3
     ) +
     scale_fill_gradient2(
       limits = c(-4, 4),
@@ -1055,13 +1101,13 @@ combined_arts_offset_plots
 
 Save fine resolution combined offset map
 ```{r}
-ggsave(
-  "./04_figures/mapped_vs_arts_offset.jpg",
-  combined_arts_offset_plots[["hex_grid_10k"]],
-  height = 7,
-  width = 11,
-  units = "in"
-)
+# ggsave(
+#   "./04_figures/verified_rts_vs_arts_offset.jpg",
+#   combined_arts_offset_plots[["hex_grid_10k"]],
+#   height = 7,
+#   width = 11,
+#   units = "in"
+# )
 ```
 
 ## Mapped RTS Counts vs RTS Susceptibility
@@ -1070,12 +1116,8 @@ ggsave(
 Redder colors indicate more RTS were mapped than predicted, while bluer colors indicate fewer RTS were mapped than predicted.
 
 ```{r}
-bi_legend_location <- c(
-  left = 0.81,
-  bottom = 0,
-  right = 1,
-  top = 0.145
-)
+#| fig-height: 8.5
+#| fig-width: 8.5
 
 hex_maps_bi_prob <- pmap(
   list(hex_grids, hex_domains, count_breaks),
@@ -1089,18 +1131,29 @@ hex_maps_bi_prob <- pmap(
       "rts_map_count",
       "rts_prob",
       domain,
-      5,
+      4,
       breaks$rts_map_count,
       round(breaks$rts_prob, 2),
-      custom_palette_5,
-      legend_loc = bi_legend_location,
+      custom_palette_4,
+      legend_loc = bi_legend_location_left,
       xlab = "RTS Count (Mapped)",
-      ylab = "RTS Susceptibility"
+      ylab = "RTS Susceptibility",
+      label_size = 12
     )
   }
 )
 
 hex_maps_bi_prob
+```
+
+Save fine resolution mapped vs susceptibility bivariate map:
+```{r}
+# ggsave(
+#   "./04_figures/verified_rts_vs_susceptibility_bivariate_map.jpg",
+#   hex_maps_bi_prob[["hex_grid_10k"]],
+#   height = 8.5,
+#   width = 8.5
+# )
 ```
 
 ### Scatter Plots
@@ -1121,10 +1174,9 @@ map(
 Blue indicates we found a lot of RTS in a low susceptibility area, while red indicates we found fewer RTS than the susceptibility would indicate.
 
 ```{r}
-count_prob_maps <- map2(
-  hex_grids,
-  hex_domains,
-  function(.x, .y) {
+count_prob_maps <- pmap(
+  list(hex_grids, hex_domains, hex_regions),
+  function(.x, .y, .z) {
     map_hex_grid(
       .x,
       .y,
@@ -1132,13 +1184,13 @@ count_prob_maps <- map2(
       label = "Mapped RTS/\nSusceptibility Offset"
     ) +
       geom_sf(
-        data = regions,
+        data = .z,
         color = "black",
         fill = "transparent",
         linetype = "dashed"
       ) +
       geom_sf_text(
-        data = regions,
+        data = .z,
         aes(label = name)
       ) +
       scale_color_gradient2(
@@ -1168,7 +1220,7 @@ With size scaled points:
 ```{r}
 pixel_count_plots_prob <- map(
   hex_grids,
-  ~ ggplot(.x, aes(x = rts_prob_class, y = rts_map_count_class)) +
+  ~ ggplot(.x, aes(x = rts_map_count_class, y = rts_prob_class)) +
     geom_ribbon(
       data = offset_bands_4,
       aes(
@@ -1235,13 +1287,13 @@ pixel_count_plots_prob <- map(
       inherit.aes = FALSE
     ) +
     scale_x_continuous(
-      name = "RTS Susceptibility Class",
+      name = "RTS Count Class (Mapped)",
       limits = c(0.25, 4.25),
       breaks = seq(1, 4),
       labels = c("Low", "", "", "High")
     ) +
     scale_y_continuous(
-      name = "RTS Count Class (Mapped)",
+      name = "RTS Susceptibility Class",
       limits = c(0.25, 4.25),
       breaks = seq(1, 4),
       labels = c("Low", "", "", "High")
@@ -1262,25 +1314,25 @@ region_offset_plots_prob <- map(
     .x,
     aes(
       x = name,
-      y = map_prob_offset
+      y = map_prob_offset_mean
     )
   ) +
     geom_hline(yintercept = 0, color = "gray50", linewidth = 0.3) +
     geom_errorbar(
       aes(
         x = name,
-        ymin = map_prob_offset - map_prob_offset_sd,
-        ymax = map_prob_offset + map_prob_offset_sd
+        ymin = map_prob_offset_mean - map_prob_offset_sd,
+        ymax = map_prob_offset_mean + map_prob_offset_sd
       ),
       width = 0,
       lineend = "round"
     ) +
     geom_point(
       aes(
-        fill = map_prob_offset
+        fill = map_prob_offset_mean
       ),
       shape = 21,
-      size = 5
+      size = 3
     ) +
     scale_fill_gradient2(
       limits = c(-4, 4),
@@ -1315,13 +1367,13 @@ combined_prob_offset_plots
 
 Save fine resolution combined offset map
 ```{r}
-ggsave(
-  "./04_figures/mapped_vs_susceptibility_offset.jpg",
-  combined_prob_offset_plots[["hex_grid_10k"]],
-  height = 7,
-  width = 11,
-  units = "in"
-)
+# ggsave(
+#   "./04_figures/verified_rts_vs_susceptibility_offset.jpg",
+#   combined_prob_offset_plots[["hex_grid_10k"]],
+#   height = 7,
+#   width = 11,
+#   units = "in"
+# )
 ```
 
 

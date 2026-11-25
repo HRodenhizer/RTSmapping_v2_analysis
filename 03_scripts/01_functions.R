@@ -196,35 +196,37 @@ custom_bi_legend <- function(
   ybreaks,
   color_palette,
   xlab,
-  ylab
+  ylab,
+  label_size
 ) {
   bi_legend(
     pal = color_palette,
     dim = bi_dim,
     xlab = xlab,
     ylab = ylab,
-    # size = 5,
+    size = label_size,
     breaks = list(
       "bi_x" = c(
-        xbreaks,
-        round(max(data |> pull(!!var1), na.rm = TRUE))
+        0,
+        round(xbreaks)
       ),
       "bi_y" = c(
-        ybreaks,
-        round(max(data |> pull(!!var2), na.rm = TRUE))
+        0,
+        round(ybreaks)
       )
     )
   ) +
     coord_fixed(
-      xlim = c(0.5, 5.5),
-      ylim = c(0.5, 5.5),
+      xlim = c(0.5, bi_dim + 0.5),
+      ylim = c(0.5, bi_dim + 0.5),
       clip = "off"
     ) +
     theme(
-      plot.margin = margin(6, 5, 6, 10),
-      plot.background = element_rect(
-        fill = fill_alpha("white", 0)
-      )
+      plot.margin = margin(0, 0, 0, 0),
+      # plot.background = element_rect(
+      #   fill = fill_alpha("white", 0)
+      # ),
+      plot.background = element_rect(fill = "transparent")
     )
 }
 
@@ -242,7 +244,8 @@ map_hex_grid_bi <- function(
   legend = TRUE,
   legend_loc,
   xlab,
-  ylab
+  ylab,
+  label_size
 ) {
   bi_map <- ggplot() +
     geom_sf(data = world_north) +
@@ -272,7 +275,7 @@ map_hex_grid_bi <- function(
       color = "black",
       fill = "transparent"
     ) +
-    # coord_sf(expand = FALSE) +
+    coord_sf(expand = FALSE) +
     theme_void()
 
   if (legend == TRUE) {
@@ -285,7 +288,8 @@ map_hex_grid_bi <- function(
       ybreaks,
       color_palette,
       xlab,
-      ylab
+      ylab,
+      label_size
     )
 
     bi_map <- bi_map +
