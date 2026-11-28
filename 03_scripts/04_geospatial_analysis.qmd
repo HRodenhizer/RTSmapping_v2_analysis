@@ -410,6 +410,45 @@ domain_grid <- domain_grid |>
   mutate(grid_area = 2500)
 ```
 
+
+## Concave Hull
+Use the concave hull algorithm to reduce the domain in which SKATER gets run to only areas where RTS were found.
+
+```{r}
+rts_concave_hull_region <- st_concave_hull(
+  rts_pt |>
+    st_union(),
+  ratio = 0.2,
+  allow_holes = TRUE
+) |>
+  st_buffer(2e5) |>
+  st_intersection(domain) |>
+  st_as_sf()
+
+ggplot() +
+  geom_sf(data = domain) +
+  geom_sf(data = rts_pt) +
+  geom_sf(data = rts_concave_hull_region, fill = "transparent")
+```
+
+```{r}
+# st_write(
+#   rts_concave_hull_region,
+#   "./01_processed_data/rts_region_arctic.geojson"
+# )
+```
+
+```{r}
+domain_grid_rts_region <- domain_grid |>
+  st_filter(rts_concave_hull_region) |>
+  mutate(
+    permafrost_prob = case_when(
+      is.na(permafrost_prob) ~ 0,
+      TRUE ~ permafrost_prob
+    )
+  )
+```
+
 ## SKATER
 The floor based on cell area (used to enforce a minimum region size) is not working. The algorithm is returning more regions than requested, except when it thinks the floor is too big and it reduces the number of regions to 1. I am unable to get it to work with a reasonable floor size; it tells me the floor is too big before it reaches a size that would actually get rid of small regions.
 
@@ -417,10 +456,15 @@ Could also try with queen adjacency again.
 
 ```{r}
 rts_regions <- skater(
-  domain_grid,
-  attrs = c("rts_count_log10", "glacial_extent_lgm", "ecoregions"),
+  domain_grid_rts_region,
+  attrs = c(
+    "rts_count_log10",
+    "ecoregions",
+    "yedoma_domain",
+    "permafrost_prob"
+  ),
   weights = "rook",
-  n_regions = 16,
+  n_regions = 14,
   bridge_islands = TRUE,
   # floor = "grid_area",
   # floor_value = 20000,
@@ -465,19 +509,37 @@ rts_regions_smooth <- rts_regions_smooth %>%
   arrange(X) %>%
   mutate(
     # name = seq(1, n())
-    name = c(
+    region_number = c(
       seq(1, 7),
       seq(7, 11),
       11,
-      seq(11, 15),
-      rep(15, 2)
+      seq(11, 14)
     ) # This clean up is manual and will not be necessary if I can get the floor argument to work in SKATER
   ) %>%
   summarise(
     geometry = st_union(geometry),
-    .by = c(name)
+    .by = c(region_number)
   ) %>%
   st_intersection(domain) %>%
+  mutate(
+    name = c(
+      "Y-K Delta",
+      "Alaska",
+      "Yukon",
+      "Coastal AK/Yukon S",
+      "Peel Plateau",
+      "Banks Island",
+      "Candian Archipelago",
+      "Greenland W",
+      "Greenland E",
+      "W Siberia",
+      "Gydan & Taymyr",
+      "Laptev Sea Coast",
+      "S Siberia",
+      "E Siberia"
+    ),
+    .before = region_number
+  ) |>
   mutate(
     centroid = st_centroid(geometry),
     .before = geometry
@@ -488,6 +550,29 @@ rts_regions_smooth <- rts_regions_smooth %>%
       st_coordinates
   ) |>
   arrange(X)
+
+# Manually remove a part of Russian Scandinavia
+keep <- rts_regions_smooth$geometry[10] |>
+  st_cast("POLYGON") |>
+  st_as_sf() |>
+  slice(c(1, 4)) |>
+  st_union()
+
+rts_regions_smooth$geometry[10] <- keep
+
+# Add back in non-RTS regions
+non_rts <- domain |>
+  st_difference(rts_regions_smooth |> st_union()) |>
+  mutate(
+    name = "Non-RTS",
+    region_number = 15,
+    centroid = NA,
+    X = NA,
+    Y = NA
+  )
+
+rts_regions_smooth <- rts_regions_smooth |>
+  bind_rows(non_rts)
 ```
 
 ## Visualize
@@ -499,8 +584,8 @@ ggplot() +
     data = rts_regions_smooth,
     aes(color = name, fill = name)
   ) +
-  scale_color_viridis() +
-  scale_fill_viridis() +
+  scale_color_viridis(discrete = TRUE) +
+  scale_fill_viridis(discrete = TRUE) +
   # geom_sf(
   #   data = rts_regions,
   #   color = "purple",
